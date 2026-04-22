@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "lactomi-zero-cost",
+  "name": "lactomi-rework-with-bot",
   "compatibility_date": "2026-04-22",
   "pages_build_output_dir": ".",
   "ai": {

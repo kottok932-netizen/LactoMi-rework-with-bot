@@ -1,0 +1,12 @@
+{
+  "name": "lactomi-zero-cost",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler pages dev . --ai AI",
+    "deploy": "wrangler pages deploy ."
+  },
+  "devDependencies": {
+    "wrangler": "^4.12.0"
+  }
+}

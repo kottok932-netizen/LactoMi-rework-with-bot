@@ -89,6 +89,43 @@ function sameOriginAllowed(request) {
   return origin === requestUrl.origin;
 }
 
+function extractAiText(aiResult) {
+  if (!aiResult) return '';
+
+  if (typeof aiResult === 'string') {
+    return aiResult.trim();
+  }
+
+  if (typeof aiResult.response === 'string') {
+    return aiResult.response.trim();
+  }
+
+  if (aiResult.result && typeof aiResult.result.response === 'string') {
+    return aiResult.result.response.trim();
+  }
+
+  if (Array.isArray(aiResult.choices) && aiResult.choices.length > 0) {
+    const firstChoice = aiResult.choices[0] || {};
+
+    if (typeof firstChoice.text === 'string') {
+      return firstChoice.text.trim();
+    }
+
+    if (firstChoice.message && typeof firstChoice.message.content === 'string') {
+      return firstChoice.message.content.trim();
+    }
+  }
+
+  if (Array.isArray(aiResult) && aiResult.length > 0) {
+    for (const item of aiResult) {
+      const extracted = extractAiText(item);
+      if (extracted) return extracted;
+    }
+  }
+
+  return '';
+}
+
 export async function onRequestOptions() {
   return new Response(null, {
     headers: {
@@ -192,9 +229,13 @@ export async function onRequestPost(context) {
       max_tokens: 1400
     });
 
-    const answer = String(aiResult && aiResult.response ? aiResult.response : '').trim();
+    const answer = extractAiText(aiResult);
     if (!answer) {
-      return json({ error: 'Модель не вернула текстовый ответ.' }, 502);
+      return json({
+        error: 'Модель не вернула текстовый ответ.',
+        debug_shape: typeof aiResult,
+        debug_keys: aiResult && typeof aiResult === 'object' ? Object.keys(aiResult) : []
+      }, 502);
     }
 
     return json({

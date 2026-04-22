@@ -13,9 +13,10 @@
   const turnstileWidget = document.getElementById('turnstileWidget');
 
   let turnstileId = null;
+  let pdfJsPromise = null;
 
   function escapeHtml(value) {
-    return value
+    return String(value || '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -75,6 +76,105 @@
     });
   }
 
+  async function loadPdfJs() {
+    if (window.pdfjsLib) return window.pdfjsLib;
+    if (pdfJsPromise) return pdfJsPromise;
+
+    pdfJsPromise = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.mjs')
+      .then(function (mod) {
+        mod.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.mjs';
+        window.pdfjsLib = mod;
+        return mod;
+      });
+
+    return pdfJsPromise;
+  }
+
+  function groupTextItemsIntoLines(items) {
+    const prepared = items
+      .filter(function (item) {
+        return item && typeof item.str === 'string' && item.str.trim();
+      })
+      .map(function (item) {
+        return {
+          str: item.str,
+          x: Array.isArray(item.transform) ? Number(item.transform[4] || 0) : 0,
+          y: Array.isArray(item.transform) ? Number(item.transform[5] || 0) : 0,
+          hasEOL: Boolean(item.hasEOL)
+        };
+      })
+      .sort(function (a, b) {
+        if (Math.abs(a.y - b.y) > 2.5) return b.y - a.y;
+        return a.x - b.x;
+      });
+
+    const lines = [];
+    for (const item of prepared) {
+      const lastLine = lines[lines.length - 1];
+      if (!lastLine || Math.abs(lastLine.y - item.y) > 2.5) {
+        lines.push({ y: item.y, items: [item] });
+      } else {
+        lastLine.items.push(item);
+      }
+    }
+
+    return lines.map(function (line) {
+      const ordered = line.items.sort(function (a, b) { return a.x - b.x; });
+      let result = '';
+      let prevX = null;
+      for (const item of ordered) {
+        const text = String(item.str || '').trim();
+        if (!text) continue;
+        if (!result) {
+          result = text;
+        } else {
+          const gap = prevX === null ? 0 : item.x - prevX;
+          result += gap > 12 ? '  ' : ' ';
+          result += text;
+        }
+        prevX = item.x;
+        if (item.hasEOL) result += '\n';
+      }
+      return result.replace(/[ \t]{2,}/g, ' ').replace(/\s+\n/g, '\n').trim();
+    }).filter(Boolean);
+  }
+
+  function stripSensitiveLines(text) {
+    return String(text || '')
+      .replace(/\r/g, '\n')
+      .split(/\n+/)
+      .filter(function (line) {
+        const value = String(line || '').trim();
+        if (!value) return false;
+        return !/^(ФИО|ИНЗ:?|Пол:?|Возраст:?|Дата взятия образца:?|Дата поступления образца:?|Дата печати результата:?|Врач:?|М\.П\.|Подпись врача)/i.test(value);
+      })
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  async function extractTextFromPdf(file) {
+    const pdfjsLib = await loadPdfJs();
+    const data = new Uint8Array(await file.arrayBuffer());
+    const task = pdfjsLib.getDocument({
+      data,
+      useSystemFonts: true,
+      isEvalSupported: false
+    });
+
+    const pdfDoc = await task.promise;
+    const pages = [];
+
+    for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber += 1) {
+      const page = await pdfDoc.getPage(pageNumber);
+      const textContent = await page.getTextContent({ disableNormalization: false });
+      const lines = groupTextItemsIntoLines(textContent.items);
+      pages.push(lines.join('\n'));
+    }
+
+    return stripSensitiveLines(pages.join('\n\n'));
+  }
+
   renderTurnstileWhenReady();
 
   form.addEventListener('submit', async function (event) {
@@ -99,16 +199,31 @@
 
     clearMessages();
     addMessage('user', `Файл: ${pdf.name}${message ? `\n\nВопрос: ${message}` : ''}`);
-    setStatus('Идёт обработка…', 'loading');
+    setStatus('Читаем PDF…', 'loading');
     submitBtn.disabled = true;
     submitBtn.textContent = 'Обрабатываем…';
 
+    let extractedText = '';
+    let extractionFailed = false;
+
+    try {
+      extractedText = await extractTextFromPdf(pdf);
+    } catch (_) {
+      extractionFailed = true;
+    }
+
     const formData = new FormData();
-    formData.append('analysis_pdf', pdf);
+    formData.append('analysis_pdf_name', pdf.name);
     formData.append('message', message);
     formData.append('website', websiteField.value || '');
     formData.append('consent', consentField && consentField.checked ? '1' : '0');
     formData.append('privacy_confirm', privacyField && privacyField.checked ? '1' : '0');
+
+    if (extractedText && extractedText.length >= 80) {
+      formData.append('analysis_text', extractedText);
+    } else {
+      formData.append('analysis_pdf', pdf);
+    }
 
     const token = getTurnstileToken();
     if (token) {
@@ -116,6 +231,8 @@
     }
 
     try {
+      setStatus(extractedText ? 'Разбираем показатели…' : 'Пробуем обработать PDF…', 'loading');
+
       const response = await fetch('/api/analyze', {
         method: 'POST',
         body: formData,
@@ -136,7 +253,10 @@
       setStatus('Готово', 'ok');
       resetTurnstile();
     } catch (error) {
-      addMessage('bot', `Ошибка: ${error.message || 'Что-то пошло не так.'}`);
+      const extraHint = extractionFailed
+        ? '\n\nПодсказка: браузеру не удалось достать текст из PDF. Для сканов нужен отдельный OCR-режим.'
+        : '';
+      addMessage('bot', `Ошибка: ${error.message || 'Что-то пошло не так.'}${extraHint}`);
       setStatus('Ошибка', 'error');
       resetTurnstile();
     } finally {

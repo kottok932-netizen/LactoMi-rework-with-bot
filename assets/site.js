@@ -264,8 +264,8 @@
     if (normalized.includes('в норме')) return { cls: 'section-normal', icon: '✓' };
     if (normalized.includes('обратить внимание')) return { cls: 'section-warning', icon: '!' };
     if (normalized.includes('может значить')) return { cls: 'section-meaning', icon: '?' };
-    if (normalized.includes('можно сделать') || normalized.includes('общие шаги')) return { cls: 'section-action', icon: '→' };
-    if (normalized.includes('ответ на вопрос')) return { cls: 'section-question', icon: '↺' };
+    if (normalized.includes('можно сделать')) return { cls: 'section-action', icon: '→' };
+    if (normalized.includes('lactomi')) return { cls: 'section-question', icon: '↺' };
     if (normalized.includes('важно')) return { cls: 'section-important', icon: 'i' };
     return { cls: 'section-neutral', icon: '•' };
   }
@@ -275,15 +275,14 @@
     if (!lines.length) return '';
 
     let title = '';
-    if (lines.length > 1 && /^[^:]{1,80}:$/.test(lines[0])) {
+    if (lines.length > 1 && /^[^:]{1,90}:$/.test(lines[0])) {
       title = lines.shift().replace(/:$/, '');
-    } else if (lines.length > 1 && lines[0].length <= 80 && !/^[-•]/.test(lines[0])) {
+    } else if (lines.length > 1 && lines[0].length <= 90 && !/^[-•]/.test(lines[0])) {
       title = lines.shift();
     }
 
     const theme = getBotSectionTheme(title);
     let html = '<section class="bot-section ' + theme.cls + '">';
-
     if (title) {
       html += '<div class="bot-section-head">';
       html += '<span class="bot-section-icon">' + escapeHtml(theme.icon) + '</span>';

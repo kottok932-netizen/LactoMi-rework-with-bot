@@ -1,3 +1,5 @@
+import KB from '../data/microbiome-kb.js';
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -8,16 +10,13 @@ function json(data, status = 200) {
   });
 }
 
-
 function normalizeConversionResult(result) {
-  if (Array.isArray(result)) return result[0];
-  return result;
+  return Array.isArray(result) ? result[0] : result;
 }
 
 function trimMarkdown(markdown, maxChars = 50000) {
   const text = String(markdown || '').trim();
-  if (text.length <= maxChars) return text;
-  return text.slice(0, maxChars) + '\n\n[Текст документа был сокращён для обработки.]';
+  return text.length <= maxChars ? text : text.slice(0, maxChars) + '\n\n[Текст документа был сокращён для обработки.]';
 }
 
 function sameOriginAllowed(request) {
@@ -44,7 +43,7 @@ function stripSensitiveLines(text) {
     .filter((line) => {
       const value = String(line || '').trim();
       if (!value) return false;
-      return !/^(ФИО|ИНЗ:?|Пол:?|Возраст:?|Дата взятия образца:?|Дата поступления образца:?|Дата печати результата:?|Врач:?|Комментарии к заявке:?|М\.П\.|Подпись врача)/i.test(value);
+      return !/^(ФИО|ИНЗ:?|Пол:?|Возраст:?|Дата взятия образца:?|Дата поступления образца:?|Дата печати результата:?|Врач:?|Комментарии к заявке:?|М\.П\.?|Подпись врача)/i.test(value);
     })
     .join('\n')
     .trim();
@@ -54,8 +53,8 @@ function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function flexSpaces(pattern) {
-  return escapeRegex(pattern).replace(/\s+/g, '\\s+');
+function flexSpaces(value) {
+  return escapeRegex(value).replace(/\s+/g, '\\s+');
 }
 
 function parseMaybeNumber(value) {
@@ -71,6 +70,7 @@ function normalizeValueText(value) {
     .replace(/\s+/g, ' ')
     .replace(/не\s*обнаружено/gi, 'не обнаружено')
     .replace(/не\s*обнар\.?($|\s)/gi, 'не обнаружено$1')
+    .replace(/отсутствует/gi, 'не обнаружено')
     .trim();
 }
 
@@ -84,9 +84,7 @@ function parseRange(refText) {
   if (rangeMatch) {
     const min = parseMaybeNumber(rangeMatch[1]);
     const max = parseMaybeNumber(rangeMatch[2]);
-    if (min !== null && max !== null) {
-      return { type: 'range', min, max };
-    }
+    if (min !== null && max !== null) return { type: 'range', min, max };
   }
 
   const ltMatch = text.match(/(?:до|<|<=|≤)\s*([0-9]+(?:[.,][0-9]+)?)/);
@@ -104,27 +102,27 @@ function parseRange(refText) {
   return { type: 'text', text: refText };
 }
 
+const LOW_WHEN_ABSENT = new Set(['akkermansia', 'b_theta']);
+const URGENT_KEYS = new Set(['salmonella', 'shigella', 'c_difficile']);
+const CAUTION_KEYS = new Set(['parvimonas', 'fusobacterium']);
+const PRODUCT_RELEVANT_KEYS = new Set(['lactobacillus']);
+
 function compareValueToReference(resultText, refText, markerKey) {
   const cleanResult = normalizeValueText(resultText);
   const resultLower = cleanResult.toLowerCase();
   const numeric = parseMaybeNumber(cleanResult);
   const ref = parseRange(refText);
 
-  if (ref.type === 'any') {
-    return { status: 'normal', numeric, note: 'any' };
-  }
+  if (ref.type === 'any') return { status: 'normal', numeric, note: 'any' };
 
   if (ref.type === 'not_detected') {
-    if (resultLower.includes('не обнаружено') || resultLower === '0') {
-      return { status: 'normal', numeric };
-    }
+    if (resultLower.includes('не обнаружено') || resultLower === '0') return { status: 'normal', numeric };
     return { status: 'detected', numeric };
   }
 
   if (numeric === null) {
     if (resultLower.includes('не обнаружено')) {
-      if (markerKey === 'akkermansia') return { status: 'borderline_low', numeric: null };
-      return { status: 'normal', numeric: null };
+      return LOW_WHEN_ABSENT.has(markerKey) ? { status: 'borderline_low', numeric: null } : { status: 'normal', numeric: null };
     }
     return { status: 'unknown', numeric: null };
   }
@@ -135,235 +133,47 @@ function compareValueToReference(resultText, refText, markerKey) {
     return { status: 'normal', numeric };
   }
 
-  if (ref.type === 'max') {
-    if (numeric > ref.max) return { status: 'high', numeric };
-    return { status: 'normal', numeric };
-  }
-
-  if (ref.type === 'min') {
-    if (numeric < ref.min) return { status: 'low', numeric };
-    return { status: 'normal', numeric };
-  }
-
+  if (ref.type === 'max') return numeric > ref.max ? { status: 'high', numeric } : { status: 'normal', numeric };
+  if (ref.type === 'min') return numeric < ref.min ? { status: 'low', numeric } : { status: 'normal', numeric };
   return { status: 'unknown', numeric };
 }
 
-const MARKERS = [
-  {
-    key: 'total_mass',
-    label: 'Общая бактериальная масса',
-    aliases: ['Общая бактериальная масса'],
-    explainNormal: 'Общая бактериальная масса в референсе — по этому бланку выраженного снижения общей заселённости микробиоты не видно.',
-    explainLow: 'Общая бактериальная масса ниже референса. Такое бывает после антибиотиков, инфекций или при общем сдвиге микробиоты.',
-    explainHigh: 'Общая бактериальная масса выше референса. Это само по себе не диагноз, но иногда бывает при избыточном бактериальном росте.'
-  },
-  {
-    key: 'lactobacillus',
-    label: 'Lactobacillus spp.',
-    aliases: ['Lactobacillus spp.', 'Lactobacillus spp'],
-    explainNormal: 'Лактобактерии в пределах референса — защитная флора слизистой по этому показателю выглядит сохранной.',
-    explainLow: 'Лактобактерии снижены. Это может сопровождаться более слабой барьерной функцией слизистой и повышенной чувствительностью ЖКТ.',
-    explainHigh: 'Лактобактерии выше референса. Обычно это не выглядит тревожно и нередко бывает на фоне пробиотиков.'
-  },
-  {
-    key: 'bifidobacterium',
-    label: 'Bifidobacterium spp.',
-    aliases: ['Bifidobacterium spp.', 'Bifidobacterium spp'],
-    explainNormal: 'Бифидобактерии в норме — это хороший признак для базовой поддерживающей флоры.',
-    explainLow: 'Бифидобактерии снижены. Это может быть связано с бедным по клетчатке рационом или общим дисбиотическим сдвигом.',
-    explainHigh: 'Бифидобактерии выше референса. Обычно без отдельной клинической значимости.'
-  },
-  {
-    key: 'e_coli',
-    label: 'Escherichia coli',
-    aliases: ['Escherichia coli', 'Escherichia coli типичная'],
-    explainNormal: 'Типичная кишечная палочка находится в допустимом диапазоне.',
-    explainLow: 'Типичная E. coli ниже референса. Иногда это бывает при угнетении нормофлоры.',
-    explainHigh: 'Типичная E. coli выше референса. На этом фоне у части людей бывают брожение, вздутие или дискомфорт.'
-  },
-  {
-    key: 'bacteroides',
-    label: 'Bacteroides spp.',
-    aliases: ['Bacteroides spp.', 'Bacteroides spp'],
-    explainNormal: 'Bacteroides spp. в пределах референса.',
-    explainLow: 'Bacteroides spp. ниже референса. Это может отражать сдвиг в переработке сложных углеводов.',
-    explainHigh: 'Bacteroides spp. выше референса. Отдельно это не всегда проблема — важен общий контекст анализа.'
-  },
-  {
-    key: 'faecali',
-    label: 'Faecalibacterium prausnitzii',
-    aliases: ['Faecalibacterium prausnitzii'],
-    explainNormal: 'Faecalibacterium prausnitzii в референсе — это спокойный признак по противовоспалительному профилю.',
-    explainLow: 'Faecalibacterium prausnitzii снижена. Это может указывать на более слабую выработку бутирата и менее устойчивый противовоспалительный фон.',
-    explainHigh: 'Faecalibacterium prausnitzii выше референса. Обычно это не выглядит проблемой.'
-  },
-  {
-    key: 'b_theta',
-    label: 'Bacteroides thetaiotaomicron',
-    aliases: ['Bacteroides thetaiotaomicron'],
-    explainNormal: 'Bacteroides thetaiotaomicron присутствует в допустимом диапазоне.',
-    explainLow: 'Bacteroides thetaiotaomicron снижена или не определяется. Иногда это бывает при бедном по клетчатке рационе.',
-    explainHigh: 'Bacteroides thetaiotaomicron определяется. Для этого показателя лаборатория часто допускает любое количество.'
-  },
-  {
-    key: 'akkermansia',
-    label: 'Akkermansia muciniphila',
-    aliases: ['Akkermansia muciniphila'],
-    explainNormal: 'Akkermansia muciniphila определяется в допустимом диапазоне.',
-    explainLow: 'Akkermansia muciniphila не определяется или очень низкая. Иногда это обсуждают как менее благоприятный маркёр слизистого барьера.',
-    explainHigh: 'Akkermansia muciniphila в пределах допустимого диапазона.'
-  },
-  {
-    key: 'enterococcus',
-    label: 'Enterococcus spp.',
-    aliases: ['Enterococcus spp.', 'Enterococcus spp'],
-    explainNormal: 'Enterococcus spp. в допустимом диапазоне.',
-    explainLow: 'Enterococcus spp. низко определяются. Обычно это не является отдельной проблемой.',
-    explainHigh: 'Enterococcus spp. выше референса. Это стоит оценивать вместе с симптомами и общим контекстом.'
-  },
-  {
-    key: 'blautia',
-    label: 'Blautia spp.',
-    aliases: ['Blautia spp.', 'Blautia spp'],
-    explainNormal: 'Blautia spp. в пределах референса.',
-    explainLow: 'Blautia spp. ниже референса.',
-    explainHigh: 'Blautia spp. выше референса.'
-  },
-  {
-    key: 'acinetobacter',
-    label: 'Acinetobacter spp.',
-    aliases: ['Acinetobacter spp.', 'Acinetobacter spp'],
-    explainNormal: 'Acinetobacter spp. в допустимом диапазоне.',
-    explainLow: 'Acinetobacter spp. низко определяются — обычно без отдельного значения.',
-    explainHigh: 'Acinetobacter spp. выше референса — это стоит обсудить с врачом в контексте симптомов.'
-  },
-  {
-    key: 'e_rectale',
-    label: 'Eubacterium rectale',
-    aliases: ['Eubacterium rectale'],
-    explainNormal: 'Eubacterium rectale в пределах референса.',
-    explainLow: 'Eubacterium rectale ниже референса.',
-    explainHigh: 'Eubacterium rectale выше референса.'
-  },
-  {
-    key: 'streptococcus',
-    label: 'Streptococcus spp.',
-    aliases: ['Streptococcus spp.', 'Streptococcus spp'],
-    explainNormal: 'Streptococcus spp. в допустимом диапазоне.',
-    explainLow: 'Streptococcus spp. низко определяются — обычно без отдельного значения.',
-    explainHigh: 'Streptococcus spp. выше референса. Это стоит оценивать вместе с другими показателями.'
-  },
-  {
-    key: 'roseburia',
-    label: 'Roseburia inulinivorans',
-    aliases: ['Roseburia inulinivorans'],
-    explainNormal: 'Roseburia inulinivorans в пределах референса.',
-    explainLow: 'Roseburia inulinivorans ниже референса.',
-    explainHigh: 'Roseburia inulinivorans выше референса.'
-  },
-  {
-    key: 'prevotella',
-    label: 'Prevotella spp.',
-    aliases: ['Prevotella spp.', 'Prevotella spp'],
-    explainNormal: 'Prevotella spp. в допустимом диапазоне.',
-    explainLow: 'Prevotella spp. ниже референса.',
-    explainHigh: 'Prevotella spp. выше референса.'
-  },
-  {
-    key: 'm_smithii',
-    label: 'Methanobrevibacter smithii',
-    aliases: ['Methanobrevibacter smithii'],
-    explainNormal: 'Methanobrevibacter smithii в пределах референса.',
-    explainLow: 'Methanobrevibacter smithii ниже референса.',
-    explainHigh: 'Methanobrevibacter smithii выше референса.'
-  },
-  {
-    key: 'm_stadmanae',
-    label: 'Methanosphaera stadmanae',
-    aliases: ['Methanosphaera stadmanae'],
-    explainNormal: 'Methanosphaera stadmanae в пределах референса.',
-    explainLow: 'Methanosphaera stadmanae ниже референса.',
-    explainHigh: 'Methanosphaera stadmanae выше референса.'
-  },
-  {
-    key: 'ruminococcus',
-    label: 'Ruminococcus spp.',
-    aliases: ['Ruminococcus spp.', 'Ruminococcus spp'],
-    explainNormal: 'Ruminococcus spp. в допустимом диапазоне.',
-    explainLow: 'Ruminococcus spp. ниже референса.',
-    explainHigh: 'Ruminococcus spp. выше референса.'
-  },
-  {
-    key: 'ratio_bact_faec',
-    label: 'Соотношение Bacteroides/Faecalibacterium prausnitzii',
-    aliases: [
-      'Соотношение Bacteroides speciales/ Faecalibacterium prausnitzii',
-      'Соотношение Bacteroides species/ Faecalibacterium prausnitzii',
-      'Соотношение Bacteroides/Faecalibacterium prausnitzii'
-    ],
-    explainNormal: 'Соотношение Bacteroides/Faecalibacterium находится в пределах референса.',
-    explainLow: 'Соотношение Bacteroides/Faecalibacterium ниже референса.',
-    explainHigh: 'Соотношение Bacteroides/Faecalibacterium выше референса. Это иногда трактуют как менее благоприятный баланс в сторону воспалительного фона.'
-  },
-  {
-    key: 'parvimonas',
-    label: 'Parvimonas micra',
-    aliases: ['Parvimonas micra'],
-    explainNormal: 'Parvimonas micra не обнаружена.',
-    explainLow: 'Parvimonas micra не обнаружена.',
-    explainHigh: 'Parvimonas micra обнаружена. Такой результат лучше отдельно обсудить с врачом.'
-  },
-  {
-    key: 'fusobacterium',
-    label: 'Fusobacterium nucleatum',
-    aliases: ['Fusobacterium nucleatum'],
-    explainNormal: 'Fusobacterium nucleatum не обнаружена.',
-    explainLow: 'Fusobacterium nucleatum не обнаружена.',
-    explainHigh: 'Fusobacterium nucleatum обнаружена. Такой результат требует обсуждения с врачом.'
-  },
-  {
-    key: 'candida',
-    label: 'Candida spp.',
-    aliases: ['Candida spp.', 'Candida spp'],
-    explainNormal: 'Candida spp. в допустимом диапазоне или не определяется.',
-    explainLow: 'Candida spp. не определяется или в низком количестве.',
-    explainHigh: 'Candida spp. выше допустимого уровня. Это может соответствовать грибковому сдвигу микробиоты.'
-  },
-  {
-    key: 'klebsiella',
-    label: 'Klebsiella pneumoniae / oxytoca',
-    aliases: ['Klebsiella pneumoniae / oxytoca', 'Klebsiella pneumoniae/oxytoca'],
-    explainNormal: 'Klebsiella в допустимом диапазоне или не определяется.',
-    explainLow: 'Klebsiella не определяется или в низком количестве.',
-    explainHigh: 'Klebsiella выше допустимого уровня. Это нужно оценивать с врачом, особенно при жалобах.'
-  },
-  {
-    key: 'c_difficile',
-    label: 'Clostridium difficile',
-    aliases: ['Clostridium difficile'],
-    explainNormal: 'Clostridium difficile не обнаружена.',
-    explainLow: 'Clostridium difficile не обнаружена.',
-    explainHigh: 'Clostridium difficile обнаружена. Это повод не откладывать консультацию врача.'
-  },
-  {
-    key: 'salmonella',
-    label: 'Salmonella spp.',
-    aliases: ['Salmonella spp.', 'Salmonella spp'],
-    explainNormal: 'Salmonella spp. не обнаружена.',
-    explainLow: 'Salmonella spp. не обнаружена.',
-    explainHigh: 'Salmonella spp. обнаружена. Это требует обязательной консультации врача.'
-  },
-  {
-    key: 'shigella',
-    label: 'Shigella spp.',
-    aliases: ['Shigella spp.', 'Shigella spp'],
-    explainNormal: 'Shigella spp. не обнаружена.',
-    explainLow: 'Shigella spp. не обнаружена.',
-    explainHigh: 'Shigella spp. обнаружена. Это требует обязательной консультации врача.'
-  }
-];
+const KB_MAP = new Map((KB.markers || []).map((item) => [item.key, item]));
 
-const CRITICAL_KEYS = new Set(['parvimonas', 'fusobacterium', 'c_difficile', 'salmonella', 'shigella']);
+const MARKERS = [
+  { key: 'total_mass', label: 'Общая бактериальная масса', aliases: ['Общая бактериальная масса'] },
+  { key: 'lactobacillus', label: 'Lactobacillus spp.', aliases: ['Lactobacillus spp.', 'Lactobacillus spp'] },
+  { key: 'bifidobacterium', label: 'Bifidobacterium spp.', aliases: ['Bifidobacterium spp.', 'Bifidobacterium spp'] },
+  { key: 'e_coli_typical', label: 'Escherichia coli', aliases: ['Escherichia coli', 'Escherichia coli типичная'] },
+  { key: 'bacteroides', label: 'Bacteroides spp.', aliases: ['Bacteroides spp.', 'Bacteroides spp'] },
+  { key: 'faecali', label: 'Faecalibacterium prausnitzii', aliases: ['Faecalibacterium prausnitzii'] },
+  { key: 'b_theta', label: 'Bacteroides thetaiotaomicron', aliases: ['Bacteroides thetaiotaomicron'] },
+  { key: 'akkermansia', label: 'Akkermansia muciniphila', aliases: ['Akkermansia muciniphila'] },
+  { key: 'enterococcus', label: 'Enterococcus spp.', aliases: ['Enterococcus spp.', 'Enterococcus spp'] },
+  { key: 'blautia', label: 'Blautia spp.', aliases: ['Blautia spp.', 'Blautia spp'] },
+  { key: 'acinetobacter', label: 'Acinetobacter spp.', aliases: ['Acinetobacter spp.', 'Acinetobacter spp'] },
+  { key: 'e_rectale', label: 'Eubacterium rectale', aliases: ['Eubacterium rectale'] },
+  { key: 'streptococcus', label: 'Streptococcus spp.', aliases: ['Streptococcus spp.', 'Streptococcus spp'] },
+  { key: 'roseburia', label: 'Roseburia inulinivorans', aliases: ['Roseburia inulinivorans'] },
+  { key: 'prevotella', label: 'Prevotella spp.', aliases: ['Prevotella spp.', 'Prevotella spp'] },
+  { key: 'm_smithii', label: 'Methanobrevibacter smithii', aliases: ['Methanobrevibacter smithii'] },
+  { key: 'm_stadmanae', label: 'Methanosphaera stadmanae', aliases: ['Methanosphaera stadmanae'] },
+  { key: 'ruminococcus', label: 'Ruminococcus spp.', aliases: ['Ruminococcus spp.', 'Ruminococcus spp'] },
+  { key: 'ratio_bact_faec', label: 'Соотношение Bacteroides/Faecalibacterium prausnitzii', aliases: ['Соотношение Bacteroides speciales/ Faecalibacterium prausnitzii', 'Соотношение Bacteroides species/ Faecalibacterium prausnitzii', 'Соотношение Bacteroides/Faecalibacterium prausnitzii'] },
+  { key: 'epec', label: 'Escherichia coli enteropathogenic (ЭПКП)', aliases: ['Escherichia coli enteropathogenic', 'Escherichia coli enteropathogenic (ЭПКП)', 'ЭПКП'] },
+  { key: 'klebsiella', label: 'Klebsiella pneumoniae / oxytoca', aliases: ['Klebsiella pneumoniae / oxytoca', 'Klebsiella pneumoniae/oxytoca'] },
+  { key: 'candida', label: 'Candida spp.', aliases: ['Candida spp.', 'Candida spp'] },
+  { key: 'staph_aureus', label: 'Staphylococcus aureus', aliases: ['Staphylococcus aureus'] },
+  { key: 'c_difficile', label: 'Clostridium difficile', aliases: ['Clostridium difficile'] },
+  { key: 'c_perfringens', label: 'Clostridium perfringens', aliases: ['Clostridium perfringens'] },
+  { key: 'proteus', label: 'Proteus vulgaris/mirabilis', aliases: ['Proteus vulgaris/mirabilis', 'Proteus vulgaris / mirabilis'] },
+  { key: 'citrobacter', label: 'Citrobacter spp.', aliases: ['Citrobacter spp.', 'Citrobacter spp'] },
+  { key: 'enterobacter', label: 'Enterobacter spp.', aliases: ['Enterobacter spp.', 'Enterobacter spp'] },
+  { key: 'salmonella', label: 'Salmonella spp.', aliases: ['Salmonella spp.', 'Salmonella spp'] },
+  { key: 'shigella', label: 'Shigella spp.', aliases: ['Shigella spp.', 'Shigella spp'] },
+  { key: 'fusobacterium', label: 'Fusobacterium nucleatum', aliases: ['Fusobacterium nucleatum'] },
+  { key: 'parvimonas', label: 'Parvimonas micra', aliases: ['Parvimonas micra'] }
+].map((item) => ({ ...item, meta: KB_MAP.get(item.key) || null }));
 
 function extractMarker(text, marker) {
   for (const alias of marker.aliases) {
@@ -372,7 +182,8 @@ function extractMarker(text, marker) {
       aliasPattern +
       '\\s+((?:не\\s*обнаружено|не\\s*обнар\\.?|отсутствует|[<>]?[0-9]+(?:[.,][0-9]+)?))' +
       '(?:\\s*(?:lg|Ig)\\s*копий\\/мл)?' +
-      '\\s+((?:допустимо\\s+любое\\s+количество|не\\s*обнаружено|[<>]?[0-9]+(?:[.,][0-9]+)?\\s*-\\s*[<>]?[0-9]+(?:[.,][0-9]+)?|(?:до|<|<=|≤)\\s*[0-9]+(?:[.,][0-9]+)?|(?:от|>|>=|≥)\\s*[0-9]+(?:[.,][0-9]+)?))',
+      '[\\s:;,-]*' +
+      '((?:допустимо\\s+любое\\s+количество|не\\s*обнаружено|[<>]?[0-9]+(?:[.,][0-9]+)?\\s*-\\s*[<>]?[0-9]+(?:[.,][0-9]+)?|(?:до|<|<=|≤)\\s*[0-9]+(?:[.,][0-9]+)?|(?:от|>|>=|≥)\\s*[0-9]+(?:[.,][0-9]+)?))',
       'i'
     );
 
@@ -386,7 +197,6 @@ function extractMarker(text, marker) {
       };
     }
   }
-
   return null;
 }
 
@@ -399,103 +209,165 @@ function extractMarkers(text) {
   return items;
 }
 
+function buildFallbackMeta(item) {
+  return {
+    role: item.label + ' оценивается вместе с остальными показателями анализа.',
+    when_low_public: item.label + ' ниже референса и требует оценки в клиническом контексте.',
+    when_high_public: item.label + ' выше референса и требует оценки в клиническом контексте.',
+    when_detected_public: item.label + ' обнаружен(а), это лучше обсудить с врачом.',
+    evidence_tone: 'general'
+  };
+}
+
 function attachStatuses(items) {
   return items.map((item) => {
-    const meta = MARKERS.find((m) => m.key === item.key);
+    const spec = MARKERS.find((m) => m.key === item.key);
+    const meta = (spec && spec.meta) || buildFallbackMeta(item);
     const comparison = compareValueToReference(item.result, item.reference, item.key);
-    return {
-      ...item,
-      meta,
-      ...comparison
-    };
+    return { ...item, meta, ...comparison };
   });
 }
 
-function formatItem(item) {
-  return `${item.label}: ${item.result} (референс: ${item.reference})`;
+function cleanupAiAnswer(text) {
+  return String(text || '')
+    .replace(/\r/g, '\n')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function uniqueStrings(items) {
   return Array.from(new Set(items.filter(Boolean)));
 }
 
-function renderRuleBasedAnswer(parsed, message, productName) {
-  const foundCore = parsed.filter((item) => ['total_mass', 'lactobacillus', 'bifidobacterium', 'e_coli', 'bacteroides', 'faecali', 'ratio_bact_faec'].includes(item.key));
+function getSeverity(parsed) {
   const abnormal = parsed.filter((item) => ['low', 'high', 'detected', 'borderline_low'].includes(item.status));
-  const critical = abnormal.filter((item) => CRITICAL_KEYS.has(item.key));
-  const normalImportant = parsed.filter((item) => item.status === 'normal' && ['total_mass', 'lactobacillus', 'bifidobacterium', 'e_coli', 'bacteroides', 'faecali', 'akkermansia', 'ratio_bact_faec'].includes(item.key));
+  const urgent = abnormal.some((item) => URGENT_KEYS.has(item.key));
+  const caution = abnormal.some((item) => CAUTION_KEYS.has(item.key));
+  const protectiveLow = abnormal.filter((item) => ['lactobacillus', 'bifidobacterium', 'faecali', 'akkermansia', 'b_theta'].includes(item.key)).length;
+  const balanceIssues = abnormal.filter((item) => ['ratio_bact_faec', 'bacteroides', 'e_coli_typical'].includes(item.key)).length;
 
+  if (urgent) return 'нужна очная оценка врача';
+  if (caution && abnormal.length >= 2) return 'нужна очная оценка врача';
+  if (protectiveLow >= 2 || abnormal.length >= 4 || (protectiveLow >= 1 && balanceIssues >= 1)) return 'выраженный дисбаланс';
+  if (abnormal.length >= 2) return 'умеренный дисбаланс';
+  if (abnormal.length >= 1) return 'лёгкий дисбаланс';
+  return 'спокойная картина';
+}
+
+function summarizeNormal(item) {
+  return item.label + ' в пределах референса (' + item.result + ').';
+}
+
+function summarizeAbnormal(item) {
+  if (item.status === 'detected') return item.label + ': обнаружен(а) (' + item.result + ').';
+  if (item.status === 'high') return item.label + ': выше референса (' + item.result + ' при норме ' + item.reference + ').';
+  if (item.status === 'low' || item.status === 'borderline_low') return item.label + ': ниже референса или не определяется (' + item.result + ' при норме ' + item.reference + ').';
+  return item.label + ': есть отклонение (' + item.result + ').';
+}
+
+function explainPublic(item) {
+  if (item.status === 'detected') return item.meta.when_detected_public || item.meta.when_high_public || buildFallbackMeta(item).when_detected_public;
+  if (item.status === 'high') return item.meta.when_high_public || buildFallbackMeta(item).when_high_public;
+  if (item.status === 'low' || item.status === 'borderline_low') return item.meta.when_low_public || buildFallbackMeta(item).when_low_public;
+  return item.meta.role || buildFallbackMeta(item).role;
+}
+
+function buildQuestionReply(message, severity) {
+  if (!message) return '';
+  if (/опас|страш|серьез|плохо|критич/i.test(message)) {
+    if (severity === 'спокойная картина') return 'По одному бланку выраженной тревоги не видно, но ориентироваться всегда стоит ещё и на симптомы.';
+    if (severity === 'нужна очная оценка врача') return 'Есть маркёры, которые лучше обсудить очно с врачом, но по одному анализу всё равно нельзя делать окончательный вывод.';
+    return 'Есть отклонения, на которые стоит обратить внимание, но окончательная оценка зависит от симптомов и очной консультации.';
+  }
+  if (/что делать|с чего начать|дальше/i.test(message)) {
+    return 'Начните с спокойного разбора результата вместе с симптомами, питания и анамнеза; дальше обычно обсуждают рацион и необходимость очной консультации.';
+  }
+  return 'На ваш вопрос лучше отвечать с учётом жалоб, самочувствия и истории болезни, поэтому этот анализ стоит обсуждать не изолированно.';
+}
+
+function shouldMentionProduct(parsed) {
+  const abnormal = parsed.filter((item) => ['low', 'high', 'detected', 'borderline_low'].includes(item.status));
+  if (abnormal.some((item) => URGENT_KEYS.has(item.key))) return false;
+  return abnormal.some((item) => PRODUCT_RELEVANT_KEYS.has(item.key));
+}
+
+function buildActionSteps(parsed, severity) {
+  const abnormal = parsed.filter((item) => ['low', 'high', 'detected', 'borderline_low'].includes(item.status));
+  const steps = [];
+
+  if (severity === 'нужна очная оценка врача') {
+    steps.push('Показать результат гастроэнтерологу очно, особенно если есть боль, кровь в стуле, температура, похудение или выраженное ухудшение самочувствия.');
+  }
+  if (abnormal.some((item) => ['lactobacillus', 'bifidobacterium', 'faecali', 'akkermansia', 'b_theta'].includes(item.key))) {
+    steps.push('Пересмотреть рацион: достаточно ли клетчатки, овощей, цельных продуктов и нет ли перекоса в сторону сладкого и ультрапереработанной еды.');
+  }
+  if (abnormal.some((item) => ['e_coli_typical', 'enterococcus', 'candida', 'klebsiella', 'proteus', 'citrobacter', 'enterobacter'].includes(item.key))) {
+    steps.push('Вести короткий дневник симптомов и питания 1-2 недели, чтобы обсуждать анализ уже вместе с жалобами, а не изолированно.');
+  }
+  if (abnormal.some((item) => ['faecali', 'akkermansia', 'ratio_bact_faec'].includes(item.key))) {
+    steps.push('Не начинать самостоятельно антибиотики, бактериофаги или добавки без врача; такие решения лучше принимать после очной оценки.');
+  }
+  if (!steps.length) {
+    steps.push('Если жалоб нет, обычно достаточно наблюдать самочувствие, поддерживать разнообразное питание и обсуждать результат без спешки.');
+  }
+  return uniqueStrings(steps).slice(0, 5);
+}
+
+function buildProductText(parsed, brandName) {
+  const composition = Array.isArray(KB.branding && KB.branding.composition) ? KB.branding.composition.join(', ') : '';
+  if (!shouldMentionProduct(parsed)) {
+    return 'По этому анализу не стоит делать главный акцент на продукте: важнее смотреть на общую картину, симптомы и рекомендации врача.';
+  }
+  return brandName + ' можно рассматривать как поддерживающий комплекс после обсуждения со специалистом. Он не заменяет лечение и не используется для постановки диагноза.' + (composition ? ' В составе: ' + composition + '.' : '');
+}
+
+function renderRuleBasedAnswer(parsed, message, brandName) {
+  const abnormal = parsed.filter((item) => ['low', 'high', 'detected', 'borderline_low'].includes(item.status));
+  const normalImportant = parsed.filter((item) => item.status === 'normal' && ['total_mass', 'bifidobacterium', 'bacteroides', 'faecali', 'akkermansia'].includes(item.key));
+  const severity = getSeverity(parsed);
   const parts = [];
 
-  if (abnormal.length === 0 && foundCore.length >= 4) {
-    parts.push('Краткий итог:\nПо этому анализу явных выраженных отклонений не видно. Основные показатели выглядят спокойно и укладываются в референсы лаборатории.');
-  } else if (critical.length > 0) {
-    parts.push('Краткий итог:\nВ анализе есть показатели, которые стоит обсудить с врачом очно. Это не диагноз, но здесь лучше не ограничиваться только онлайн-расшифровкой.');
-  } else if (abnormal.length > 0) {
-    parts.push('Краткий итог:\nЕсть несколько отклонений от референса. Они не равны диагнозу, но могут объяснять жалобы и заслуживают спокойного разбора вместе с врачом.');
+  if (severity === 'спокойная картина') {
+    parts.push('Краткий итог:\nПо анализу нет выраженных отклонений: картина выглядит достаточно спокойной.');
+  } else if (severity === 'лёгкий дисбаланс') {
+    parts.push('Краткий итог:\nЕсть отдельные умеренные отклонения, которые чаще требуют спокойного наблюдения и обсуждения результата в контексте симптомов.');
+  } else if (severity === 'умеренный дисбаланс') {
+    parts.push('Краткий итог:\nЕсть несколько отклонений, которые можно описать как умеренный дисбаланс микробиоты.');
+  } else if (severity === 'выраженный дисбаланс') {
+    parts.push('Краткий итог:\nЕсть сочетание отклонений, которое больше похоже на выраженный дисбаланс микробиоты и заслуживает внимательного разбора.');
   } else {
-    parts.push('Краткий итог:\nИз документа удалось извлечь только часть показателей. Ниже — то, что получилось прочитать достаточно надёжно.');
+    parts.push('Краткий итог:\nВ анализе есть маркёры, которые лучше обсудить с врачом очно, не ограничиваясь только онлайн-расшифровкой.');
   }
 
-  if (normalImportant.length > 0) {
-    const normalLines = normalImportant.slice(0, 6).map((item) => `- ${formatItem(item)}`);
-    parts.push('Что в норме:\n' + normalLines.join('\n'));
+  if (normalImportant.length) {
+    parts.push('Что в норме:\n' + normalImportant.slice(0, 5).map((item) => '- ' + summarizeNormal(item)).join('\n'));
   }
 
-  if (abnormal.length > 0) {
-    const abnormalLines = abnormal.map((item) => `- ${formatItem(item)}`);
-    parts.push('На что обратить внимание:\n' + abnormalLines.join('\n'));
-
-    const explainLines = uniqueStrings(abnormal.map((item) => {
-      if (!item.meta) return '';
-      if (item.status === 'low' || item.status === 'borderline_low') return item.meta.explainLow;
-      if (item.status === 'high' || item.status === 'detected') return item.meta.explainHigh;
-      return '';
-    }));
-
-    if (explainLines.length > 0) {
-      parts.push('Что это может значить простыми словами:\n' + explainLines.map((line) => `- ${line}`).join('\n'));
-    }
-  } else if (foundCore.length >= 4) {
-    const calmComments = uniqueStrings(normalImportant.slice(0, 5).map((item) => item.meta && item.meta.explainNormal));
-    if (calmComments.length > 0) {
-      parts.push('Что это может значить простыми словами:\n' + calmComments.map((line) => `- ${line}`).join('\n'));
-    }
+  if (abnormal.length) {
+    const explanationItems = abnormal.slice().sort((a, b) => {
+      const aScore = URGENT_KEYS.has(a.key) ? 0 : (CAUTION_KEYS.has(a.key) ? 1 : 2);
+      const bScore = URGENT_KEYS.has(b.key) ? 0 : (CAUTION_KEYS.has(b.key) ? 1 : 2);
+      return aScore - bScore;
+    });
+    parts.push('На что обратить внимание:\n' + abnormal.map((item) => '- ' + summarizeAbnormal(item)).join('\n'));
+    parts.push('Что это может значить простыми словами:\n' + uniqueStrings(explanationItems.map((item) => explainPublic(item))).slice(0, 5).map((line) => '- ' + line).join('\n'));
+  } else {
+    parts.push('На что обратить внимание:\n- Выраженных отклонений по основным считанным маркёрам не видно.');
+    parts.push('Что это может значить простыми словами:\n- По этому бланку защитная и противовоспалительная флора выглядит достаточно спокойно, но окончательную оценку всегда связывают с самочувствием.');
   }
 
-  const advice = [];
-  if (critical.length > 0) {
-    advice.push('Обсудить результат с гастроэнтерологом и не затягивать с очной консультацией, особенно если есть боль, температура, кровь в стуле или выраженное ухудшение самочувствия.');
-  }
-  if (abnormal.some((item) => ['lactobacillus', 'bifidobacterium'].includes(item.key))) {
-    advice.push('Посмотреть на рацион: достаточно ли клетчатки, кисломолочных продуктов, регулярного питания и нет ли недавнего курса антибиотиков.');
-  }
-  if (abnormal.some((item) => ['faecali', 'akkermansia', 'ratio_bact_faec', 'b_theta'].includes(item.key))) {
-    advice.push('Обсудить с врачом мягкую поддержку микробиоты и слизистого барьера: питание, клетчатку, переносимость пребиотиков и общую тактику восстановления.');
-  }
-  if (abnormal.some((item) => ['e_coli', 'enterococcus', 'candida', 'klebsiella'].includes(item.key))) {
-    advice.push('Если есть вздутие, нестабильный стул или брожение, обсуждать результат лучше вместе с симптомами — без этого бланк сам по себе не даёт полного вывода.');
-  }
-  if (advice.length === 0) {
-    advice.push('Если жалоб нет, обычно такой бланк обсуждают спокойно и без спешки. Если жалобы есть, имеет смысл показать результат гастроэнтерологу вместе с симптомами, питанием и анамнезом.');
-  }
-  parts.push('Что можно сделать сейчас:\n' + advice.map((line) => `- ${line}`).join('\n'));
-
-  if (abnormal.some((item) => item.key === 'lactobacillus')) {
-    parts.push(`Когда может быть уместна мягкая поддержка ${productName}:\nЕсли основная задача — поддержать лактобактерии и восстановление микробиоты после стресса, погрешностей в питании или перенесённой терапии, продукты ${productName} можно рассматривать только как мягкую поддержку, а не как лечение.`);
-  } else if (abnormal.length === 0 && foundCore.length >= 4) {
-    parts.push(`Когда может быть уместна мягкая поддержка ${productName}:\nПо этому бланку нет явного повода делать упор именно на коррекцию лактобактерий. Если у человека есть жалобы, решение о поддержке лучше принимать не по одному показателю, а по общей картине.`);
-  }
-
-  if (message) {
-    if (abnormal.length === 0 && /проблем|опас|плохо|серьез/i.test(message)) {
-      parts.push('Ответ на вопрос пользователя:\nПо этому бланку выраженных проблем не видно. Если есть симптомы, ориентироваться стоит не только на анализ, но и на самочувствие.');
-    } else if (abnormal.length > 0 && /проблем|опас|плохо|серьез/i.test(message)) {
-      parts.push('Ответ на вопрос пользователя:\nДа, в бланке есть моменты, на которые стоит обратить внимание, но по одному анализу нельзя ставить диагноз. Важны жалобы и очная оценка врача.');
-    }
-  }
-
-  parts.push('Важно:\nРезультаты не являются диагнозом. Для медицинских решений нужна консультация врача.');
+  const questionReply = buildQuestionReply(message, severity);
+  const steps = buildActionSteps(parsed, severity);
+  if (questionReply) steps.unshift(questionReply);
+  parts.push('Что можно сделать сейчас:\n' + uniqueStrings(steps).slice(0, 5).map((line) => '- ' + line).join('\n'));
+  parts.push('Что касается ' + brandName + ':\n' + buildProductText(parsed, brandName));
+  parts.push('Важно:\nЭтот разбор носит образовательный характер и не заменяет консультацию врача.');
 
   return parts.join('\n\n');
 }
@@ -513,41 +385,19 @@ function extractAiText(aiResult) {
   return '';
 }
 
-function cleanupAiAnswer(text) {
-  return String(text || '')
-    .replace(/\r/g, '\n')
-    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/__(.*?)__/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
-    .replace(/^\s*>\s?/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-async function aiFallback(env, markdownText, message, productName) {
+async function aiFallback(env, markdownText, message, brandName) {
   if (!env.AI || !env.AI.run) return '';
   const model = env.AI_MODEL || '@cf/qwen/qwen3-30b-a3b-fp8';
   const prompt = [
-    'Ты — спокойный русскоязычный помощник по расшифровке анализов микробиоты.',
-    'Опирайся только на текст ниже. Не придумывай показатели и не ставь диагноз.',
-    'Ответ нужен для обычного человека простым языком.',
-    'Пиши без markdown-разметки: не используй символы #, ##, ###, **, __, --- и таблицы.',
-    'Сделай аккуратный ответ из 5-7 коротких смысловых блоков.',
-    'Структура ответа:',
-    'Краткий итог',
-    'Что в норме',
-    'На что обратить внимание',
-    'Что это может значить простыми словами',
-    'Что можно сделать сейчас',
-    'Ответ на вопрос пользователя',
-    'Важно',
-    'В блоке "Что можно сделать сейчас" обязательно дай 3-5 практичных и безопасных шагов для пациента.',
-    'Если по анализу всё спокойно, прямо напиши, что срочных действий не требуется, и дай только общие рекомендации по питанию, режиму и наблюдению за симптомами.',
-    'Не перечисляй все показатели подряд, если их много. Выделяй только ключевые.',
-    `Если мягкое упоминание бренда уместно, используй ${productName}, но только как мягкую поддержку, а не как лечение.`,
-    message ? `Вопрос пользователя: ${message}` : 'Если пользователь не задал вопрос, всё равно кратко объясни, что делать дальше.',
+    'Ты — русскоязычный помощник сервиса ' + brandName + ' для образовательной расшифровки анализов микробиоты кишечника.',
+    'Опирайся только на реально извлечённый текст ниже. Не придумывай показатели, диагнозы и назначения.',
+    'Пиши простым, спокойным языком без markdown-разметки: без #, **, __, --- и таблиц.',
+    'Структура ответа: Краткий итог, Что в норме, На что обратить внимание, Что это может значить простыми словами, Что можно сделать сейчас, Что касается ' + brandName + ', Важно.',
+    'Не назначай дозировку, антибиотики, бактериофаги, БАДы и не обещай лечение.',
+    'Если есть Parvimonas micra или Fusobacterium nucleatum, объясняй осторожно: это не диагноз по одному анализу, а повод обсудить результат с врачом.',
+    'Если есть Salmonella, Shigella или Clostridium difficile, советуй обратиться к врачу очно без затягивания.',
+    'Продукт упоминай мягко и только как поддержку после обсуждения со специалистом.',
+    message ? 'Вопрос пользователя: ' + message : 'Если отдельного вопроса нет, всё равно кратко объясни, что делать дальше.',
     '',
     markdownText
   ].filter(Boolean).join('\n');
@@ -564,7 +414,6 @@ async function aiFallback(env, markdownText, message, productName) {
   }
 }
 
-
 export async function onRequestOptions() {
   return new Response(null, { headers: { Allow: 'POST, OPTIONS' } });
 }
@@ -577,7 +426,6 @@ export async function onRequestPost(context) {
   }
 
   const formData = await request.formData();
-
   const pdf = formData.get('analysis_pdf');
   const browserText = trimMarkdown(stripSensitiveLines(String(formData.get('analysis_text') || '')), 50000);
   const pdfName = String(formData.get('analysis_pdf_name') || ((pdf instanceof File && pdf.name) ? pdf.name : 'analysis.pdf'));
@@ -594,20 +442,15 @@ export async function onRequestPost(context) {
 
   const hasPdfFile = pdf instanceof File;
   const hasBrowserText = browserText.length >= 80;
-
-  if (!hasPdfFile && !hasBrowserText) {
-    return json({ error: 'Нужно загрузить PDF-файл анализа.' }, 400);
-  }
+  if (!hasPdfFile && !hasBrowserText) return json({ error: 'Нужно загрузить PDF-файл анализа.' }, 400);
 
   if (hasPdfFile) {
     const isPdf = pdf.type === 'application/pdf' || String(pdf.name || '').toLowerCase().endsWith('.pdf');
     if (!isPdf) return json({ error: 'Поддерживаются только PDF-файлы.' }, 400);
-    if (pdf.size > 10 * 1024 * 1024) {
-      return json({ error: 'PDF слишком большой. Для этого MVP лучше ограничить размер до 10 МБ.' }, 400);
-    }
+    if (pdf.size > 10 * 1024 * 1024) return json({ error: 'PDF слишком большой. Для этого MVP лучше ограничить размер до 10 МБ.' }, 400);
   }
 
-  const productName = env.PRODUCT_NAME || 'LactoMi';
+  const brandName = (KB.branding && KB.branding.brand) || env.PRODUCT_NAME || 'LactoMi Balance';
 
   try {
     let workingText = '';
@@ -652,15 +495,16 @@ export async function onRequestPost(context) {
 
     let answer = '';
     if (extracted.length >= 4) {
-      answer = renderRuleBasedAnswer(extracted, message, productName);
+      answer = renderRuleBasedAnswer(extracted, message, brandName);
     } else if (workingText) {
-      answer = await aiFallback(env, workingText, message, productName);
+      answer = await aiFallback(env, workingText, message, brandName);
     }
 
+    answer = cleanupAiAnswer(answer);
     if (!answer) {
       return json({
         error: 'Не получилось надёжно разобрать этот PDF.',
-        hint: 'Для цифровых PDF лучше включить извлечение текста в браузере. Для сканов нужен отдельный OCR-режим.',
+        hint: 'Лучше всего подходят цифровые PDF, где текст можно выделить. Со сканами точность ниже.',
         extracted_markers: extracted.length,
         source: source || 'none',
         file_name: pdfName,
@@ -669,8 +513,6 @@ export async function onRequestPost(context) {
         tomarkdown_available: !!(env.AI && typeof env.AI.toMarkdown === 'function')
       }, 422);
     }
-
-    answer = cleanupAiAnswer(answer);
 
     return json({
       answer,

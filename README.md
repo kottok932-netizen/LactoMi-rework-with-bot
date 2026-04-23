@@ -40,3 +40,7 @@
 ## Важно
 
 Эта версия сделана именно для отладки. Когда всё заработает, капчу можно вернуть отдельным шагом.
+
+
+## 2026-04 CSP fix
+This build allows loading PDF.js from cdnjs so browser-side text extraction works under the configured Content Security Policy.

@@ -636,11 +636,13 @@
 
     try {
       let rawText = '';
+      let browserExtractError = '';
       try {
         setStatus('Читаем текст из PDF…', 'loading');
         rawText = await extractTextFromPdf(pdf);
-      } catch (_) {
+      } catch (pdfError) {
         rawText = '';
+        browserExtractError = pdfError && pdfError.message ? String(pdfError.message) : 'browser_pdf_extract_failed';
       }
 
       const formData = new FormData();
@@ -651,7 +653,7 @@
       formData.append('website', websiteField ? websiteField.value : '');
       formData.append('consent', consentField && consentField.checked ? '1' : '0');
       formData.append('privacy_confirm', privacyField && privacyField.checked ? '1' : '0');
-
+      formData.append('browser_extract_error', browserExtractError);
 
       setStatus('Отправляем на сервер…', 'loading');
       const response = await fetch('/api/analyze', {
@@ -663,7 +665,14 @@
       const payload = await response.json().catch(function () { return {}; });
 
       if (!response.ok) {
-        throw new Error(payload.error || payload.details || 'Не удалось обработать PDF.');
+        const debug = [];
+        if (typeof payload.extracted_markers === 'number') debug.push('markers=' + payload.extracted_markers);
+        if (payload.source) debug.push('source=' + payload.source);
+        if (payload.browser_extract_error) debug.push('browser=' + payload.browser_extract_error);
+        if (payload.ai_available === false) debug.push('AI=off');
+        if (payload.tomarkdown_available === false) debug.push('toMarkdown=off');
+        const suffix = debug.length ? '\n\nТех. детали: ' + debug.join(', ') : '';
+        throw new Error((payload.error || payload.details || 'Не удалось обработать PDF.') + suffix);
       }
 
       if (!payload.answer) {

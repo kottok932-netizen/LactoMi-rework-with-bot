@@ -560,6 +560,7 @@ export async function onRequestPost(context) {
   const honeypot = String(formData.get('website') || '');
   const consent = String(formData.get('consent') || '');
   const privacyConfirm = String(formData.get('privacy_confirm') || '');
+  const browserExtractError = String(formData.get('browser_extract_error') || '').trim();
 
   if (honeypot) return json({ error: 'Запрос отклонён.' }, 400);
   if (consent !== '1' || privacyConfirm !== '1') {
@@ -637,7 +638,10 @@ export async function onRequestPost(context) {
         hint: 'Для цифровых PDF лучше включить извлечение текста в браузере. Для сканов нужен отдельный OCR-режим.',
         extracted_markers: extracted.length,
         source: source || 'none',
-        file_name: pdfName
+        file_name: pdfName,
+        browser_extract_error: browserExtractError || undefined,
+        ai_available: !!(env.AI && env.AI.run),
+        tomarkdown_available: !!(env.AI && typeof env.AI.toMarkdown === 'function')
       }, 422);
     }
 

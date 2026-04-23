@@ -258,6 +258,18 @@
     return escapeHtml(value).replace(/\n/g, '<br>');
   }
 
+  function getBotSectionTheme(title) {
+    const normalized = String(title || '').toLowerCase();
+    if (normalized.includes('краткий итог')) return { cls: 'section-summary', icon: '◎' };
+    if (normalized.includes('в норме')) return { cls: 'section-normal', icon: '✓' };
+    if (normalized.includes('обратить внимание')) return { cls: 'section-warning', icon: '!' };
+    if (normalized.includes('может значить')) return { cls: 'section-meaning', icon: '?' };
+    if (normalized.includes('можно сделать') || normalized.includes('общие шаги')) return { cls: 'section-action', icon: '→' };
+    if (normalized.includes('ответ на вопрос')) return { cls: 'section-question', icon: '↺' };
+    if (normalized.includes('важно')) return { cls: 'section-important', icon: 'i' };
+    return { cls: 'section-neutral', icon: '•' };
+  }
+
   function renderBotBlock(block) {
     const lines = block.split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
     if (!lines.length) return '';
@@ -269,8 +281,15 @@
       title = lines.shift();
     }
 
-    let html = '<section class="bot-section">';
-    if (title) html += '<h4>' + escapeHtml(title) + '</h4>';
+    const theme = getBotSectionTheme(title);
+    let html = '<section class="bot-section ' + theme.cls + '">';
+
+    if (title) {
+      html += '<div class="bot-section-head">';
+      html += '<span class="bot-section-icon">' + escapeHtml(theme.icon) + '</span>';
+      html += '<h4>' + escapeHtml(title) + '</h4>';
+      html += '</div>';
+    }
 
     let listItems = [];
     function flushList() {
@@ -300,7 +319,18 @@
     if (!normalized) return '<div class="bot-answer-empty">Пустой ответ.</div>';
     const blocks = normalized.split(/\n{2,}/).map(function (block) { return block.trim(); }).filter(Boolean);
     const html = blocks.map(renderBotBlock).join('');
-    return '<div class="bot-answer">' + html + '</div>';
+    return [
+      '<div class="bot-card">',
+      '  <div class="bot-card-top">',
+      '    <div class="bot-avatar">AI</div>',
+      '    <div class="bot-card-meta">',
+      '      <strong>LactoMi Bot</strong>',
+      '      <span>Понятная расшифровка анализа</span>',
+      '    </div>',
+      '  </div>',
+      '  <div class="bot-answer">' + html + '</div>',
+      '</div>'
+    ].join('');
   }
 
   function addMessage(type, text) {
@@ -309,7 +339,7 @@
     if (type === 'bot') {
       div.innerHTML = renderBotMessage(text);
     } else {
-      div.innerHTML = renderInlineText(text);
+      div.innerHTML = '<div class="user-bubble">' + renderInlineText(text) + '</div>';
     }
     chatOutput.appendChild(div);
     chatOutput.scrollTop = chatOutput.scrollHeight;
@@ -730,14 +760,9 @@
       const payload = await response.json().catch(function () { return {}; });
 
       if (!response.ok) {
-        const debug = [];
-        if (typeof payload.extracted_markers === 'number') debug.push('markers=' + payload.extracted_markers);
-        if (payload.source) debug.push('source=' + payload.source);
-        if (payload.browser_extract_error) debug.push('browser=' + payload.browser_extract_error);
-        if (payload.ai_available === false) debug.push('AI=off');
-        if (payload.tomarkdown_available === false) debug.push('toMarkdown=off');
-        const suffix = debug.length ? '\n\nТех. детали: ' + debug.join(', ') : '';
-        throw new Error((payload.error || payload.details || 'Не удалось обработать PDF.') + suffix);
+        const message = payload.error || payload.details || 'Не удалось обработать PDF.';
+        const hint = payload.hint ? '\n\n' + payload.hint : '';
+        throw new Error(message + hint);
       }
 
       if (!payload.answer) {
@@ -748,7 +773,7 @@
       setStatus('Готово', 'ok');
 
     } catch (error) {
-      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать PDF.') + '\n\nПроверьте, что на Cloudflare Pages задан binding AI и функция доступна по адресу /api/analyze.');
+      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать PDF.') + '\n\nПопробуйте обновить страницу, загрузить более чёткий PDF или повторить запрос чуть позже.');
       setStatus('Ошибка', 'error');
     } finally {
       submitBtn.disabled = false;

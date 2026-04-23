@@ -98,10 +98,6 @@
 
               <input id="websiteField" name="website" type="text" autocomplete="off" tabindex="-1" class="honeypot" aria-hidden="true">
 
-              <div id="turnstileWrap" class="turnstile-wrap hidden">
-                <div id="turnstileWidget"></div>
-              </div>
-
               <div class="form-actions">
                 <button id="submitBtn" class="btn btn-primary" type="submit">Расшифровать анализ</button>
                 <p class="form-help">Обычно ответ приходит за 10–30 секунд.</p>
@@ -291,7 +287,7 @@
       </div>
       <div>
         <h3>Что уже собрано</h3>
-        <p>Готовая главная страница, AI-функция для PDF, форма загрузки, защита через Turnstile и инструкция по бесплатному запуску.</p>
+        <p>Готовая главная страница, AI-функция для PDF, форма загрузки без капчи и инструкция по бесплатному запуску.</p>
       </div>
       <div>
         <h3>Дополнительно</h3>
@@ -302,7 +298,6 @@
   </footer>
 
   <script src="./assets/config.js"></script>
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
   <script src="./assets/site.js"></script>
 </body>
 </html>

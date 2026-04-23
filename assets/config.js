@@ -1,3 +1,1 @@
-window.LACTOMI_CONFIG = {
-  turnstileSiteKey: "PASTE_YOUR_TURNSTILE_SITE_KEY_HERE"
-};
+window.LACTOMI_CONFIG = {};

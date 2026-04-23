@@ -8,18 +8,6 @@ function json(data, status = 200) {
   });
 }
 
-async function validateTurnstile(token, secret, remoteip) {
-  if (!secret) return { success: true, skipped: true };
-  if (!token) return { success: false, error: 'Turnstile token is missing' };
-
-  const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ secret, response: token, remoteip })
-  });
-
-  return response.json();
-}
 
 function normalizeConversionResult(result) {
   if (Array.isArray(result)) return result[0];
@@ -563,14 +551,12 @@ export async function onRequestPost(context) {
     return json({ error: 'Недопустимый источник запроса.' }, 403);
   }
 
-  const remoteip = request.headers.get('CF-Connecting-IP') || '';
   const formData = await request.formData();
 
   const pdf = formData.get('analysis_pdf');
   const browserText = trimMarkdown(stripSensitiveLines(String(formData.get('analysis_text') || '')), 50000);
   const pdfName = String(formData.get('analysis_pdf_name') || ((pdf instanceof File && pdf.name) ? pdf.name : 'analysis.pdf'));
   const message = String(formData.get('message') || '').trim().slice(0, 1200);
-  const turnstileToken = String(formData.get('cf-turnstile-response') || '');
   const honeypot = String(formData.get('website') || '');
   const consent = String(formData.get('consent') || '');
   const privacyConfirm = String(formData.get('privacy_confirm') || '');
@@ -593,11 +579,6 @@ export async function onRequestPost(context) {
     if (pdf.size > 10 * 1024 * 1024) {
       return json({ error: 'PDF слишком большой. Для этого MVP лучше ограничить размер до 10 МБ.' }, 400);
     }
-  }
-
-  const turnstileResult = await validateTurnstile(turnstileToken, env.TURNSTILE_SECRET, remoteip);
-  if (!turnstileResult.success) {
-    return json({ error: 'Проверка Turnstile не пройдена. Обновите страницу и попробуйте снова.' }, 403);
   }
 
   const productName = env.PRODUCT_NAME || 'LactoMi';

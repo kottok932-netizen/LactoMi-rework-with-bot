@@ -8,14 +8,12 @@
   const websiteField = document.getElementById('websiteField');
   const consentField = document.getElementById('analysisConsent');
   const privacyField = document.getElementById('analysisPrivacy');
-  const turnstileWrap = document.getElementById('turnstileWrap');
 
   if (!form || !pdfInput || !chatOutput || !statusBadge || !submitBtn) {
     return;
   }
 
   let pdfJsPromise = null;
-  let turnstileWidgetId = null;
 
 
   const MARKERS = [
@@ -604,40 +602,6 @@
     return stripSensitiveLines(pages.join('\n\n'));
   }
 
-  function getTurnstileToken() {
-    const responseField = document.querySelector('input[name="cf-turnstile-response"]');
-    return responseField ? String(responseField.value || '') : '';
-  }
-
-  function maybeInitTurnstile() {
-    const config = window.LACTOMI_CONFIG || {};
-    const siteKey = String(config.turnstileSiteKey || '').trim();
-    if (!turnstileWrap) return;
-
-    if (!siteKey || siteKey === 'PASTE_YOUR_TURNSTILE_SITE_KEY_HERE') {
-      turnstileWrap.classList.add('hidden');
-      return;
-    }
-
-    function renderWidget() {
-      if (!window.turnstile || turnstileWidgetId !== null) return;
-      turnstileWrap.classList.remove('hidden');
-      turnstileWidgetId = window.turnstile.render('#turnstileWidget', {
-        sitekey: siteKey,
-        theme: 'light'
-      });
-    }
-
-    if (window.turnstile) {
-      renderWidget();
-    } else {
-      window.addEventListener('load', renderWidget);
-      setTimeout(renderWidget, 1200);
-    }
-  }
-
-  maybeInitTurnstile();
-
   form.addEventListener('submit', async function (event) {
     event.preventDefault();
 
@@ -688,8 +652,6 @@
       formData.append('consent', consentField && consentField.checked ? '1' : '0');
       formData.append('privacy_confirm', privacyField && privacyField.checked ? '1' : '0');
 
-      const turnstileToken = getTurnstileToken();
-      if (turnstileToken) formData.append('cf-turnstile-response', turnstileToken);
 
       setStatus('Отправляем на сервер…', 'loading');
       const response = await fetch('/api/analyze', {
@@ -711,11 +673,8 @@
       addMessage('bot', payload.answer);
       setStatus('Готово', 'ok');
 
-      if (window.turnstile && turnstileWidgetId !== null) {
-        window.turnstile.reset(turnstileWidgetId);
-      }
     } catch (error) {
-      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать PDF.') + '\n\nПроверьте, что на Cloudflare Pages заданы binding AI и secret TURNSTILE_SECRET, а функция доступна по адресу /api/analyze.');
+      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать PDF.') + '\n\nПроверьте, что на Cloudflare Pages задан binding AI и функция доступна по адресу /api/analyze.');
       setStatus('Ошибка', 'error');
     } finally {
       submitBtn.disabled = false;

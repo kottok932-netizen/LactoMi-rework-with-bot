@@ -14,9 +14,9 @@
     return;
   }
 
-  if (turnstileWrap) turnstileWrap.classList.add('hidden');
-
   let pdfJsPromise = null;
+  let turnstileWidgetId = null;
+
 
   const MARKERS = [
     {
@@ -531,10 +531,10 @@
     if (window.pdfjsLib) return window.pdfjsLib;
     if (pdfJsPromise) return pdfJsPromise;
 
-    pdfJsPromise = loadScript('/assets/vendor/pdfjs/pdf.min.js')
+    pdfJsPromise = loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js')
       .then(function () {
         if (!window.pdfjsLib) throw new Error('PDF.js не загрузился');
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/vendor/pdfjs/pdf.worker.min.js';
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         return window.pdfjsLib;
       });
 
@@ -604,6 +604,40 @@
     return stripSensitiveLines(pages.join('\n\n'));
   }
 
+  function getTurnstileToken() {
+    const responseField = document.querySelector('input[name="cf-turnstile-response"]');
+    return responseField ? String(responseField.value || '') : '';
+  }
+
+  function maybeInitTurnstile() {
+    const config = window.LACTOMI_CONFIG || {};
+    const siteKey = String(config.turnstileSiteKey || '').trim();
+    if (!turnstileWrap) return;
+
+    if (!siteKey || siteKey === 'PASTE_YOUR_TURNSTILE_SITE_KEY_HERE') {
+      turnstileWrap.classList.add('hidden');
+      return;
+    }
+
+    function renderWidget() {
+      if (!window.turnstile || turnstileWidgetId !== null) return;
+      turnstileWrap.classList.remove('hidden');
+      turnstileWidgetId = window.turnstile.render('#turnstileWidget', {
+        sitekey: siteKey,
+        theme: 'light'
+      });
+    }
+
+    if (window.turnstile) {
+      renderWidget();
+    } else {
+      window.addEventListener('load', renderWidget);
+      setTimeout(renderWidget, 1200);
+    }
+  }
+
+  maybeInitTurnstile();
+
   form.addEventListener('submit', async function (event) {
     event.preventDefault();
 
@@ -632,26 +666,56 @@
 
     clearMessages();
     addMessage('user', 'Файл: ' + pdf.name + (message ? '\n\nВопрос: ' + message : ''));
-    setStatus('Читаем PDF локально…', 'loading');
+    setStatus('Готовим файл…', 'loading');
     submitBtn.disabled = true;
     submitBtn.textContent = 'Обрабатываем…';
 
     try {
-      const rawText = await extractTextFromPdf(pdf);
-      const normalized = normalizeTextForParsing(rawText);
-      const extracted = attachStatuses(extractMarkers(normalized));
-
-      if (extracted.length < 4) {
-        addMessage('bot', 'Не удалось уверенно вытащить показатели из этого PDF. Скорее всего, это скан, нестандартный бланк или браузер получил текст в неудобном виде.\n\nПопробуйте:\n- открыть другой цифровой PDF, где текст можно выделить мышкой;\n- обновить страницу через Ctrl+F5;\n- временно прислать текст таблицы вручную.\n\nВажно: сейчас сайт работает в полностью локальном режиме — файл никуда не отправляется.');
-        setStatus('Нужно больше данных', 'error');
-        return;
+      let rawText = '';
+      try {
+        setStatus('Читаем текст из PDF…', 'loading');
+        rawText = await extractTextFromPdf(pdf);
+      } catch (_) {
+        rawText = '';
       }
 
-      const answer = renderRuleBasedAnswer(extracted, message, 'LactoMi');
-      addMessage('bot', answer + '\n\nТехническая пометка: обработка выполнена локально в браузере, без отправки PDF на сервер.');
+      const formData = new FormData();
+      formData.append('analysis_pdf', pdf, pdf.name);
+      formData.append('analysis_pdf_name', pdf.name || 'analysis.pdf');
+      formData.append('analysis_text', rawText || '');
+      formData.append('message', message);
+      formData.append('website', websiteField ? websiteField.value : '');
+      formData.append('consent', consentField && consentField.checked ? '1' : '0');
+      formData.append('privacy_confirm', privacyField && privacyField.checked ? '1' : '0');
+
+      const turnstileToken = getTurnstileToken();
+      if (turnstileToken) formData.append('cf-turnstile-response', turnstileToken);
+
+      setStatus('Отправляем на сервер…', 'loading');
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin'
+      });
+
+      const payload = await response.json().catch(function () { return {}; });
+
+      if (!response.ok) {
+        throw new Error(payload.error || payload.details || 'Не удалось обработать PDF.');
+      }
+
+      if (!payload.answer) {
+        throw new Error('Сервер не вернул текст ответа.');
+      }
+
+      addMessage('bot', payload.answer);
       setStatus('Готово', 'ok');
+
+      if (window.turnstile && turnstileWidgetId !== null) {
+        window.turnstile.reset(turnstileWidgetId);
+      }
     } catch (error) {
-      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать PDF.') + '\n\nПопробуйте Ctrl+F5 и ещё раз. Если не поможет, значит браузер не смог загрузить PDF.js или сам файл является сканом.');
+      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать PDF.') + '\n\nПроверьте, что на Cloudflare Pages заданы binding AI и secret TURNSTILE_SECRET, а функция доступна по адресу /api/analyze.');
       setStatus('Ошибка', 'error');
     } finally {
       submitBtn.disabled = false;

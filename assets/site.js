@@ -531,10 +531,10 @@
     if (window.pdfjsLib) return window.pdfjsLib;
     if (pdfJsPromise) return pdfJsPromise;
 
-    pdfJsPromise = loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js')
+    pdfJsPromise = loadScript('/assets/vendor/pdfjs/pdf.min.js')
       .then(function () {
         if (!window.pdfjsLib) throw new Error('PDF.js не загрузился');
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/vendor/pdfjs/pdf.worker.min.js';
         return window.pdfjsLib;
       });
 

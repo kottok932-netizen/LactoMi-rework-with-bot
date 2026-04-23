@@ -513,16 +513,41 @@ function extractAiText(aiResult) {
   return '';
 }
 
+function cleanupAiAnswer(text) {
+  return String(text || '')
+    .replace(/\r/g, '\n')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 async function aiFallback(env, markdownText, message, productName) {
   if (!env.AI || !env.AI.run) return '';
   const model = env.AI_MODEL || '@cf/qwen/qwen3-30b-a3b-fp8';
   const prompt = [
     'Ты — спокойный русскоязычный помощник по расшифровке анализов микробиоты.',
-    'Опирайся только на текст ниже. Не придумывай показатели.',
-    'Если видишь в документе числовые результаты и референсы, перечисли их и коротко объясни.',
-    'Если данных недостаточно, честно скажи, чего не хватает.',
-    `Если мягкое упоминание бренда уместно, используй ${productName}, но не как лечение.`,
-    message ? `Дополнительный вопрос пользователя: ${message}` : '',
+    'Опирайся только на текст ниже. Не придумывай показатели и не ставь диагноз.',
+    'Ответ нужен для обычного человека простым языком.',
+    'Пиши без markdown-разметки: не используй символы #, ##, ###, **, __, --- и таблицы.',
+    'Сделай аккуратный ответ из 5-7 коротких смысловых блоков.',
+    'Структура ответа:',
+    'Краткий итог',
+    'Что в норме',
+    'На что обратить внимание',
+    'Что это может значить простыми словами',
+    'Что можно сделать сейчас',
+    'Ответ на вопрос пользователя',
+    'Важно',
+    'В блоке "Что можно сделать сейчас" обязательно дай 3-5 практичных и безопасных шагов для пациента.',
+    'Если по анализу всё спокойно, прямо напиши, что срочных действий не требуется, и дай только общие рекомендации по питанию, режиму и наблюдению за симптомами.',
+    'Не перечисляй все показатели подряд, если их много. Выделяй только ключевые.',
+    `Если мягкое упоминание бренда уместно, используй ${productName}, но только как мягкую поддержку, а не как лечение.`,
+    message ? `Вопрос пользователя: ${message}` : 'Если пользователь не задал вопрос, всё равно кратко объясни, что делать дальше.',
     '',
     markdownText
   ].filter(Boolean).join('\n');
@@ -530,10 +555,10 @@ async function aiFallback(env, markdownText, message, productName) {
   try {
     const aiResult = await env.AI.run(model, {
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 1200
+      temperature: 0.15,
+      max_tokens: 1600
     });
-    return extractAiText(aiResult);
+    return cleanupAiAnswer(extractAiText(aiResult));
   } catch {
     return '';
   }
@@ -644,6 +669,8 @@ export async function onRequestPost(context) {
         tomarkdown_available: !!(env.AI && typeof env.AI.toMarkdown === 'function')
       }, 422);
     }
+
+    answer = cleanupAiAnswer(answer);
 
     return json({
       answer,

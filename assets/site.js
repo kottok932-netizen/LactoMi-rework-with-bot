@@ -242,10 +242,75 @@
       .replace(/'/g, '&#039;');
   }
 
+  function cleanupDisplayText(value) {
+    return String(value || '')
+      .replace(/\r/g, '\n')
+      .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/__(.*?)__/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function renderInlineText(value) {
+    return escapeHtml(value).replace(/\n/g, '<br>');
+  }
+
+  function renderBotBlock(block) {
+    const lines = block.split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
+    if (!lines.length) return '';
+
+    let title = '';
+    if (lines.length > 1 && /^[^:]{1,80}:$/.test(lines[0])) {
+      title = lines.shift().replace(/:$/, '');
+    } else if (lines.length > 1 && lines[0].length <= 80 && !/^[-•]/.test(lines[0])) {
+      title = lines.shift();
+    }
+
+    let html = '<section class="bot-section">';
+    if (title) html += '<h4>' + escapeHtml(title) + '</h4>';
+
+    let listItems = [];
+    function flushList() {
+      if (!listItems.length) return;
+      html += '<ul>' + listItems.map(function (item) {
+        return '<li>' + renderInlineText(item) + '</li>';
+      }).join('') + '</ul>';
+      listItems = [];
+    }
+
+    lines.forEach(function (line) {
+      if (/^[-•]\s+/.test(line)) {
+        listItems.push(line.replace(/^[-•]\s+/, ''));
+        return;
+      }
+      flushList();
+      html += '<p>' + renderInlineText(line) + '</p>';
+    });
+
+    flushList();
+    html += '</section>';
+    return html;
+  }
+
+  function renderBotMessage(text) {
+    const normalized = cleanupDisplayText(text);
+    if (!normalized) return '<div class="bot-answer-empty">Пустой ответ.</div>';
+    const blocks = normalized.split(/\n{2,}/).map(function (block) { return block.trim(); }).filter(Boolean);
+    const html = blocks.map(renderBotBlock).join('');
+    return '<div class="bot-answer">' + html + '</div>';
+  }
+
   function addMessage(type, text) {
     const div = document.createElement('div');
     div.className = 'message ' + (type === 'user' ? 'message-user' : 'message-bot');
-    div.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
+    if (type === 'bot') {
+      div.innerHTML = renderBotMessage(text);
+    } else {
+      div.innerHTML = renderInlineText(text);
+    }
     chatOutput.appendChild(div);
     chatOutput.scrollTop = chatOutput.scrollHeight;
   }

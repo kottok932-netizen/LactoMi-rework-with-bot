@@ -350,6 +350,9 @@ textarea {
 
 .response-card {
   min-height: 100%;
+  background: linear-gradient(180deg, rgba(247, 252, 249, 0.96), rgba(239, 248, 244, 0.98));
+  border: 1px solid rgba(15, 123, 91, 0.12);
+  box-shadow: 0 24px 60px rgba(11, 52, 40, 0.08);
 }
 
 .response-head {
@@ -358,6 +361,8 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(15, 123, 91, 0.12);
 }
 
 .status-badge {
@@ -370,6 +375,7 @@ textarea {
   color: var(--primary-dark);
   font-size: 0.9rem;
   font-weight: 700;
+  box-shadow: inset 0 0 0 1px rgba(15, 123, 91, 0.08);
 }
 
 .status-badge.status-error {
@@ -383,30 +389,78 @@ textarea {
 
 .chat-output {
   display: grid;
-  gap: 12px;
+  gap: 14px;
   min-height: 420px;
+  max-height: 720px;
+  overflow: auto;
+  padding-right: 6px;
 }
 
 .message {
-  border-radius: 18px;
-  padding: 16px 18px;
-  white-space: pre-wrap;
+  border-radius: 22px;
+  padding: 18px 20px;
   overflow-wrap: anywhere;
 }
 
 .message-user {
-  background: rgba(223, 244, 235, 0.75);
+  background: linear-gradient(180deg, rgba(223, 244, 235, 0.92), rgba(214, 239, 228, 0.88));
   color: var(--primary-dark);
+  border: 1px solid rgba(15, 123, 91, 0.12);
 }
 
 .message-bot {
   background: rgba(255, 255, 255, 0.94);
-  border: 1px solid var(--line);
+  border: 1px solid rgba(15, 123, 91, 0.12);
+  box-shadow: 0 12px 30px rgba(11, 52, 40, 0.05);
 }
 
 .message.muted {
   color: var(--muted);
 }
+
+.bot-answer {
+  display: grid;
+  gap: 12px;
+}
+
+.bot-section {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(247, 252, 249, 0.95);
+  border: 1px solid rgba(15, 123, 91, 0.1);
+}
+
+.bot-section h4 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  color: var(--primary-dark);
+}
+
+.bot-section p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.bot-section p + p {
+  margin-top: 10px;
+}
+
+.bot-section ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+}
+
+.bot-section li {
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.bot-answer-empty {
+  color: var(--muted);
+}
+
 
 .steps-grid,
 .markers-grid,

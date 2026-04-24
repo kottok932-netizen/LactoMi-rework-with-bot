@@ -8,13 +8,21 @@
   const websiteField = document.getElementById('websiteField');
   const consentField = document.getElementById('analysisConsent');
   const privacyField = document.getElementById('analysisPrivacy');
+  const turnstileWrap = document.getElementById('turnstileWrap');
+  const turnstileWidgetEl = document.getElementById('turnstileWidget');
+  const turnstileHelp = document.getElementById('turnstileHelp');
 
   if (!form || !pdfInput || !chatOutput || !statusBadge || !submitBtn) {
     return;
   }
 
   let pdfJsPromise = null;
-
+  let turnstileScriptPromise = null;
+  let turnstileWidgetId = null;
+  let turnstileToken = '';
+  const config = window.LACTOMI_CONFIG || {};
+  const brandName = config.brandName || 'LactoMi';
+  const turnstileSiteKey = String(config.turnstileSiteKey || '').trim();
 
   const MARKERS = [
     {
@@ -323,7 +331,7 @@
       '  <div class="bot-card-top">',
       '    <div class="bot-avatar">AI</div>',
       '    <div class="bot-card-meta">',
-      '      <strong>LactoMi Bot</strong>',
+      '      <strong>' + escapeHtml(brandName) + ' AI</strong>',
       '      <span>Понятная расшифровка анализа</span>',
       '    </div>',
       '  </div>',
@@ -608,6 +616,93 @@
     return parts.join('\n\n');
   }
 
+
+  function setTurnstileHelp(text, kind) {
+    if (!turnstileHelp) return;
+    turnstileHelp.textContent = text;
+    turnstileHelp.classList.remove('is-error', 'is-ok');
+    if (kind === 'error') turnstileHelp.classList.add('is-error');
+    if (kind === 'ok') turnstileHelp.classList.add('is-ok');
+  }
+
+  function loadTurnstileScript() {
+    if (window.turnstile && typeof window.turnstile.render === 'function') {
+      return Promise.resolve(window.turnstile);
+    }
+    if (turnstileScriptPromise) return turnstileScriptPromise;
+
+    turnstileScriptPromise = new Promise(function (resolve, reject) {
+      const existing = document.querySelector('script[data-turnstile-script="1"]');
+      if (existing) {
+        existing.addEventListener('load', function () { resolve(window.turnstile); }, { once: true });
+        existing.addEventListener('error', reject, { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      script.dataset.turnstileScript = '1';
+      script.onload = function () { resolve(window.turnstile); };
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+
+    return turnstileScriptPromise;
+  }
+
+  function resetTurnstileWidget() {
+    turnstileToken = '';
+    if (window.turnstile && turnstileWidgetId !== null) {
+      try {
+        window.turnstile.reset(turnstileWidgetId);
+      } catch (_) {
+        // ignore reset errors
+      }
+    }
+    setTurnstileHelp('Подтвердите, что вы не робот, чтобы отправить анализ на разбор.', '');
+  }
+
+  async function initTurnstile() {
+    if (!turnstileWrap || !turnstileWidgetEl) return;
+
+    if (!turnstileSiteKey) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Нужна настройка капчи';
+      setTurnstileHelp('Капча не настроена: добавьте публичный ключ Turnstile в assets/config.js.', 'error');
+      return;
+    }
+
+    try {
+      const turnstile = await loadTurnstileScript();
+      if (!turnstile || typeof turnstile.render !== 'function') {
+        throw new Error('turnstile_unavailable');
+      }
+
+      turnstileWidgetId = turnstile.render(turnstileWidgetEl, {
+        sitekey: turnstileSiteKey,
+        theme: 'light',
+        callback: function (token) {
+          turnstileToken = token || '';
+          setTurnstileHelp('Проверка пройдена. Можно отправлять анализ.', 'ok');
+        },
+        'expired-callback': function () {
+          turnstileToken = '';
+          setTurnstileHelp('Проверка истекла. Подтвердите капчу ещё раз.', 'error');
+        },
+        'error-callback': function () {
+          turnstileToken = '';
+          setTurnstileHelp('Не удалось загрузить проверку. Обновите страницу и попробуйте снова.', 'error');
+        }
+      });
+    } catch (_) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Ошибка капчи';
+      setTurnstileHelp('Не удалось загрузить проверку безопасности. Обновите страницу и попробуйте снова.', 'error');
+    }
+  }
+
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
       const script = document.createElement('script');
@@ -722,6 +817,18 @@
       return;
     }
 
+    if (!turnstileSiteKey) {
+      setStatus('Капча не настроена', 'error');
+      setTurnstileHelp('Капча не настроена: добавьте публичный ключ Turnstile в assets/config.js.', 'error');
+      return;
+    }
+
+    if (!turnstileToken) {
+      setStatus('Подтвердите проверку', 'error');
+      setTurnstileHelp('Подтвердите, что вы не робот, и отправьте форму ещё раз.', 'error');
+      return;
+    }
+
     clearMessages();
     addMessage('user', 'Файл: ' + pdf.name + (message ? '\n\nВопрос: ' + message : ''));
     setStatus('Готовим файл…', 'loading');
@@ -748,6 +855,7 @@
       formData.append('consent', consentField && consentField.checked ? '1' : '0');
       formData.append('privacy_confirm', privacyField && privacyField.checked ? '1' : '0');
       formData.append('browser_extract_error', browserExtractError);
+      formData.append('cf-turnstile-response', turnstileToken);
 
       setStatus('Отправляем на сервер…', 'loading');
       const response = await fetch('/api/analyze', {
@@ -777,6 +885,9 @@
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = 'Расшифровать анализ';
+      resetTurnstileWidget();
     }
   });
+
+  initTurnstile();
 })();

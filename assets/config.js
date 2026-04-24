@@ -1,1 +1,5 @@
-window.LACTOMI_CONFIG = {};
+window.LACTOMI_CONFIG = {
+  brandName: 'LactoMi',
+  featuredProductName: 'LactoMi Balance',
+  turnstileSiteKey: ''
+};

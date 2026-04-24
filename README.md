@@ -1,46 +1,80 @@
-# LactoMi — версия без капчи
+# LactoMi — production-ready build for Cloudflare Pages
 
-Это упрощённая сборка для Cloudflare Pages **без Turnstile**.
-Она нужна для быстрого теста, чтобы сначала убедиться, что PDF-анализатор вообще работает.
+Финальная сборка для Cloudflare Pages с:
 
-## Что нужно настроить
+- AI-разбором PDF анализов микробиоты;
+- образовательным гидом по микроорганизмам;
+- продуктовым блоком вокруг LactoMi и LactoMi Balance;
+- Turnstile-капчей с серверной валидацией;
+- Pages Function по адресу `/api/analyze`.
 
-Нужен только один binding:
+## Что нужно настроить в Cloudflare
+
+### 1) Binding
+Добавьте binding:
 
 - **AI** → тип **Workers AI** → имя **AI**
 
-Никакие `Variables and Secrets` для этой версии не обязательны.
+### 2) Secret
+В проекте Pages откройте:
+
+**Settings → Variables and Secrets → Add**
+
+Создайте secret:
+
+- **Name:** `TURNSTILE_SECRET`
+- **Value:** ваш Secret Key из Cloudflare Turnstile
+
+### 3) Публичный site key
+Откройте файл:
+
+`assets/config.js`
+
+и вставьте в `turnstileSiteKey` ваш публичный **Site Key** Turnstile.
+
+Пример:
+
+```js
+window.LACTOMI_CONFIG = {
+  brandName: 'LactoMi',
+  featuredProductName: 'LactoMi Balance',
+  turnstileSiteKey: 'ВАШ_SITE_KEY'
+};
+```
+
+### 4) Опционально
+Если хотите дополнительно проверять домен на сервере, можно добавить секрет/переменную:
+
+- `TURNSTILE_EXPECTED_HOSTNAME`
+
+Например:
+
+`lactomi.pages.dev`
+
+или ваш кастомный домен.
 
 ## Как задеплоить
 
 1. Замените файлы проекта в репозитории на содержимое этого архива.
-2. Убедитесь, что в Cloudflare Pages открыт именно этот проект.
-3. В проекте зайдите в **Settings → Bindings**.
-4. Добавьте binding:
-   - Type: `Workers AI`
-   - Name: `AI`
-5. Нажмите redeploy.
+2. Убедитесь, что Pages проект подключен к нужному репозиторию.
+3. Проверьте binding `AI`.
+4. Добавьте `TURNSTILE_SECRET`.
+5. Укажите `turnstileSiteKey` в `assets/config.js`.
+6. Сделайте redeploy.
+7. После деплоя откройте сайт и нажмите **Ctrl+F5**.
 
-## Что изменено
+## Что входит в сборку
 
-- полностью убрана Turnstile-капча;
-- фронтенд больше не ждёт site key;
-- сервер больше не проверяет `TURNSTILE_SECRET`;
-- оставлена обработка PDF через `/api/analyze`.
-
-## Если бот всё ещё не отвечает
-
-Проверьте:
-
-- что сайт задеплоен именно из этой версии проекта;
-- что binding `AI` существует и называется ровно `AI`;
-- что запрос уходит на `/api/analyze`;
-- что PDF не больше 10 МБ.
+- Главная страница бренда LactoMi.
+- AI-сервис расшифровки PDF анализов.
+- Гид по микробиоте (`guide.html`).
+- Страница приватности (`privacy.html`).
+- Серверная функция `functions/api/analyze.js`.
+- База знаний по микроорганизмам `assets/data/microbiome-kb.json`.
 
 ## Важно
 
-Эта версия сделана именно для отладки. Когда всё заработает, капчу можно вернуть отдельным шагом.
-
-
-## 2026-04 CSP fix
-This build allows loading PDF.js from cdnjs so browser-side text extraction works under the configured Content Security Policy.
+- Сервис носит образовательный характер.
+- Он не ставит диагноз и не заменяет консультацию врача.
+- Лучше всего подходят цифровые PDF, где текст можно выделить.
+- Для сканов и фото точность может быть ниже.

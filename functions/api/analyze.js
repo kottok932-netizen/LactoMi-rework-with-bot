@@ -414,6 +414,32 @@ async function aiFallback(env, markdownText, message, brandName) {
   }
 }
 
+
+async function validateTurnstileToken(token, secret, remoteIp) {
+  if (!secret) {
+    return { success: false, 'error-codes': ['missing-input-secret'] };
+  }
+
+  const body = new FormData();
+  body.append('secret', secret);
+  body.append('response', token);
+  if (remoteIp) body.append('remoteip', remoteIp);
+
+  try {
+    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      body
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return { success: false, 'error-codes': ['internal-error'] };
+    }
+    return result;
+  } catch {
+    return { success: false, 'error-codes': ['internal-error'] };
+  }
+}
+
 export async function onRequestOptions() {
   return new Response(null, { headers: { Allow: 'POST, OPTIONS' } });
 }
@@ -434,10 +460,31 @@ export async function onRequestPost(context) {
   const consent = String(formData.get('consent') || '');
   const privacyConfirm = String(formData.get('privacy_confirm') || '');
   const browserExtractError = String(formData.get('browser_extract_error') || '').trim();
+  const turnstileToken = String(formData.get('cf-turnstile-response') || '').trim();
 
   if (honeypot) return json({ error: 'Запрос отклонён.' }, 400);
   if (consent !== '1' || privacyConfirm !== '1') {
     return json({ error: 'Нужно подтвердить согласие с условиями.' }, 400);
+  }
+
+  if (!env.TURNSTILE_SECRET) {
+    return json({ error: 'Капча сервиса не настроена.' }, 500);
+  }
+
+  if (!turnstileToken) {
+    return json({ error: 'Подтвердите проверку, что вы не робот.' }, 400);
+  }
+
+  const remoteIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+  const turnstileResult = await validateTurnstileToken(turnstileToken, env.TURNSTILE_SECRET, remoteIp);
+  if (!turnstileResult || !turnstileResult.success) {
+    return json({
+      error: 'Проверка безопасности не пройдена. Обновите капчу и попробуйте снова.'
+    }, 400);
+  }
+
+  if (env.TURNSTILE_EXPECTED_HOSTNAME && turnstileResult.hostname && turnstileResult.hostname !== env.TURNSTILE_EXPECTED_HOSTNAME) {
+    return json({ error: 'Проверка безопасности не совпала с доменом сайта.' }, 400);
   }
 
   const hasPdfFile = pdf instanceof File;

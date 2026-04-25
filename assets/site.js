@@ -1,6 +1,9 @@
 (function () {
   const form = document.getElementById('analysisForm');
   const pdfInput = document.getElementById('analysisPdf');
+  const galleryInput = document.getElementById('analysisGallery');
+  const cameraInput = document.getElementById('analysisCamera');
+  const selectedFileName = document.getElementById('selectedFileName');
   const messageInput = document.getElementById('analysisMessage');
   const chatOutput = document.getElementById('chatOutput');
   const statusBadge = document.getElementById('statusBadge');
@@ -16,6 +19,7 @@
     return;
   }
 
+  let selectedAnalysisFile = null;
   let pdfJsPromise = null;
   let turnstileScriptPromise = null;
   let turnstileWidgetId = null;
@@ -362,6 +366,35 @@
     if (kind === 'error') statusBadge.classList.add('status-error');
     if (kind === 'loading') statusBadge.classList.add('status-loading');
   }
+
+  function formatFileSize(bytes) {
+    const size = Number(bytes) || 0;
+    if (size >= 1048576) return (size / 1048576).toFixed(size >= 10485760 ? 0 : 1) + ' МБ';
+    if (size >= 1024) return Math.round(size / 1024) + ' КБ';
+    return size + ' Б';
+  }
+
+  function rememberSelectedFile(input) {
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+
+    selectedAnalysisFile = file;
+
+    [pdfInput, galleryInput, cameraInput].forEach(function (otherInput) {
+      if (otherInput && otherInput !== input) otherInput.value = '';
+    });
+
+    if (selectedFileName) {
+      selectedFileName.textContent = file.name + ' · ' + formatFileSize(file.size);
+    }
+
+    setStatus('Файл выбран', '');
+  }
+
+  [pdfInput, galleryInput, cameraInput].forEach(function (input) {
+    if (!input) return;
+    input.addEventListener('change', function () { rememberSelectedFile(input); });
+  });
 
   function flexSpaces(text) {
     return String(text)
@@ -794,7 +827,7 @@
   form.addEventListener('submit', async function (event) {
     event.preventDefault();
 
-    const pdf = pdfInput.files && pdfInput.files[0];
+    const pdf = selectedAnalysisFile || (pdfInput.files && pdfInput.files[0]) || (galleryInput && galleryInput.files && galleryInput.files[0]) || (cameraInput && cameraInput.files && cameraInput.files[0]);
     const message = (messageInput.value || '').trim();
 
     if (!pdf) {

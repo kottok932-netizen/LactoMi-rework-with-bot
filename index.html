@@ -111,11 +111,29 @@
         <div class="analyzer-grid">
           <div class="card analyzer-card">
             <form id="analysisForm" class="analysis-form">
-              <label class="field">
+              <div class="field file-picker-field">
                 <span>PDF или фото анализа</span>
-                <input id="analysisPdf" name="analysis_pdf" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" required>
-                <small class="field-help">Поддерживаются PDF, JPG, PNG и WEBP до 10 МБ. Для фото лучше: лист целиком, без бликов и размытия.</small>
-              </label>
+
+                <div class="upload-actions" role="group" aria-label="Выбор файла анализа">
+                  <label class="upload-action">
+                    <input id="analysisPdf" name="analysis_pdf" class="upload-native-input" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp">
+                    <span>Выбрать файл</span>
+                  </label>
+
+                  <label class="upload-action">
+                    <input id="analysisGallery" class="upload-native-input" type="file" accept="image/jpeg,image/png,image/webp,image/*,.jpg,.jpeg,.png,.webp">
+                    <span>Из галереи</span>
+                  </label>
+
+                  <label class="upload-action">
+                    <input id="analysisCamera" class="upload-native-input" type="file" accept="image/*" capture="environment">
+                    <span>Сделать фото</span>
+                  </label>
+                </div>
+
+                <p id="selectedFileName" class="selected-file-name">Файл не выбран</p>
+                <small class="field-help">Поддерживаются PDF, JPG, PNG и WEBP до 10 МБ. На телефоне можно выбрать файл, взять фото из галереи или сразу сделать снимок камерой.</small>
+              </div>
 
               <label class="field">
                 <span>Дополнительный вопрос к сервису</span>

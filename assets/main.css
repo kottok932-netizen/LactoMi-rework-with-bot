@@ -966,3 +966,76 @@ textarea {
   font-size: 0.88rem;
   line-height: 1.45;
 }
+
+.file-picker-field {
+  gap: 10px;
+}
+
+.upload-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.upload-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 123, 91, 0.22);
+  border-radius: 16px;
+  background: rgba(223, 244, 235, 0.45);
+  color: var(--primary-dark);
+  cursor: pointer;
+  text-align: center;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.upload-action:hover,
+.upload-action:focus-within {
+  transform: translateY(-1px);
+  border-color: rgba(15, 123, 91, 0.42);
+  background: rgba(223, 244, 235, 0.75);
+}
+
+.upload-action span {
+  color: inherit;
+  font-weight: 700;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+.upload-native-input,
+input[type="file"].upload-native-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
+.selected-file-name {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 123, 91, 0.12);
+  color: var(--muted);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .upload-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .upload-action {
+    min-height: 54px;
+  }
+}

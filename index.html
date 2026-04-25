@@ -102,9 +102,9 @@
       <div class="container">
         <div class="section-head">
           <span class="eyebrow">AI-сервис LactoMi</span>
-          <h2>Загрузите PDF анализа и получите структурированную расшифровку</h2>
+          <h2>Загрузите PDF или фото анализа и получите структурированную расшифровку</h2>
           <p>
-            Сервис считывает показатели микробиоты, формирует спокойный разбор и помогает увидеть общую картину без драматизации и без сухого лабораторного языка.
+            Сервис считывает показатели микробиоты из PDF или фото, формирует спокойный разбор и помогает увидеть общую картину без драматизации и без сухого лабораторного языка.
           </p>
         </div>
 
@@ -112,8 +112,9 @@
           <div class="card analyzer-card">
             <form id="analysisForm" class="analysis-form">
               <label class="field">
-                <span>PDF анализа</span>
-                <input id="analysisPdf" name="analysis_pdf" type="file" accept="application/pdf,.pdf" required>
+                <span>PDF или фото анализа</span>
+                <input id="analysisPdf" name="analysis_pdf" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp" required>
+                <small class="field-help">Поддерживаются PDF, JPG, PNG и WEBP до 10 МБ. Для фото лучше: лист целиком, без бликов и размытия.</small>
               </label>
 
               <label class="field">
@@ -128,7 +129,7 @@
 
               <label class="checkbox-row subtle">
                 <input id="analysisPrivacy" name="privacy_confirm" type="checkbox" value="1" required>
-                <span>Если в PDF есть ФИО, ИНЗ или другие личные данные, лучше закрыть их перед загрузкой.</span>
+                <span>Если в анализе есть ФИО, ИНЗ или другие личные данные, лучше закрыть их перед загрузкой.</span>
               </label>
 
               <input id="websiteField" name="website" type="text" autocomplete="off" tabindex="-1" class="honeypot" aria-hidden="true">
@@ -166,7 +167,7 @@
                   </div>
                   <div class="bot-answer">
                     <section class="bot-section section-neutral">
-                      <p>Загрузите PDF анализа, и здесь появится аккуратная расшифровка: краткий итог, ключевые отклонения, их возможное значение и общие безопасные шаги.</p>
+                      <p>Загрузите PDF или фото анализа, и здесь появится аккуратная расшифровка: краткий итог, ключевые отклонения, их возможное значение и общие безопасные шаги.</p>
                     </section>
                   </div>
                 </div>

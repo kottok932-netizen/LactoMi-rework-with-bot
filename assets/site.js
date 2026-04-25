@@ -798,7 +798,7 @@
     const message = (messageInput.value || '').trim();
 
     if (!pdf) {
-      setStatus('Загрузите PDF', 'error');
+      setStatus('Загрузите PDF или фото', 'error');
       return;
     }
 
@@ -836,19 +836,33 @@
     submitBtn.textContent = 'Обрабатываем…';
 
     try {
+      const fileNameLower = String(pdf.name || '').toLowerCase();
+      const isPdfFile = pdf.type === 'application/pdf' || fileNameLower.endsWith('.pdf');
+      const isImageFile = /^image\/(jpeg|png|webp)$/.test(pdf.type || '') || /\.(jpe?g|png|webp)$/.test(fileNameLower);
+
+      if (!isPdfFile && !isImageFile) {
+        throw new Error('Поддерживаются только PDF, JPG, PNG и WEBP.');
+      }
+
       let rawText = '';
       let browserExtractError = '';
-      try {
-        setStatus('Читаем текст из PDF…', 'loading');
-        rawText = await extractTextFromPdf(pdf);
-      } catch (pdfError) {
-        rawText = '';
-        browserExtractError = pdfError && pdfError.message ? String(pdfError.message) : 'browser_pdf_extract_failed';
+      if (isPdfFile) {
+        try {
+          setStatus('Читаем текст из PDF…', 'loading');
+          rawText = await extractTextFromPdf(pdf);
+        } catch (pdfError) {
+          rawText = '';
+          browserExtractError = pdfError && pdfError.message ? String(pdfError.message) : 'browser_pdf_extract_failed';
+        }
+      } else {
+        setStatus('Готовим фото к отправке…', 'loading');
+        browserExtractError = 'image_uploaded_no_browser_pdf_extract';
       }
 
       const formData = new FormData();
       formData.append('analysis_pdf', pdf, pdf.name);
-      formData.append('analysis_pdf_name', pdf.name || 'analysis.pdf');
+      formData.append('analysis_pdf_name', pdf.name || (isImageFile ? 'analysis-image.jpg' : 'analysis.pdf'));
+      formData.append('analysis_file_type', isImageFile ? 'image' : 'pdf');
       formData.append('analysis_text', rawText || '');
       formData.append('message', message);
       formData.append('website', websiteField ? websiteField.value : '');
@@ -867,7 +881,7 @@
       const payload = await response.json().catch(function () { return {}; });
 
       if (!response.ok) {
-        const message = payload.error || payload.details || 'Не удалось обработать PDF.';
+        const message = payload.error || payload.details || 'Не удалось обработать файл.';
         const hint = payload.hint ? '\n\n' + payload.hint : '';
         throw new Error(message + hint);
       }
@@ -880,7 +894,7 @@
       setStatus('Готово', 'ok');
 
     } catch (error) {
-      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать PDF.') + '\n\nПопробуйте обновить страницу, загрузить более чёткий PDF или повторить запрос чуть позже.');
+      addMessage('bot', 'Ошибка: ' + (error && error.message ? error.message : 'Не удалось обработать файл.') + '\n\nПопробуйте обновить страницу, загрузить более чёткий PDF/фото или повторить запрос чуть позже.');
       setStatus('Ошибка', 'error');
     } finally {
       submitBtn.disabled = false;

@@ -486,9 +486,10 @@ export async function onRequestPost(context) {
   }
 
   const formData = await request.formData();
-  const pdf = formData.get('analysis_pdf');
+  const analysisFile = formData.get('analysis_pdf');
   const browserText = trimMarkdown(stripSensitiveLines(String(formData.get('analysis_text') || '')), 50000);
-  const pdfName = String(formData.get('analysis_pdf_name') || ((pdf instanceof File && pdf.name) ? pdf.name : 'analysis.pdf'));
+  const fileName = String(formData.get('analysis_pdf_name') || ((analysisFile instanceof File && analysisFile.name) ? analysisFile.name : 'analysis.pdf'));
+  const declaredFileType = String(formData.get('analysis_file_type') || '').trim().toLowerCase();
   const message = String(formData.get('message') || '').trim().slice(0, 1200);
   const honeypot = String(formData.get('website') || '');
   const consent = String(formData.get('consent') || '');
@@ -544,14 +545,29 @@ export async function onRequestPost(context) {
     }, 400);
   }
 
-  const hasPdfFile = pdf instanceof File;
+  const hasAnalysisFile = analysisFile instanceof File;
   const hasBrowserText = browserText.length >= 80;
-  if (!hasPdfFile && !hasBrowserText) return json({ error: 'Нужно загрузить PDF-файл анализа.' }, 400);
+  if (!hasAnalysisFile && !hasBrowserText) return json({ error: 'Нужно загрузить PDF или фото анализа.' }, 400);
 
-  if (hasPdfFile) {
-    const isPdf = pdf.type === 'application/pdf' || String(pdf.name || '').toLowerCase().endsWith('.pdf');
-    if (!isPdf) return json({ error: 'Поддерживаются только PDF-файлы.' }, 400);
-    if (pdf.size > 10 * 1024 * 1024) return json({ error: 'PDF слишком большой. Для этого MVP лучше ограничить размер до 10 МБ.' }, 400);
+  let isPdf = false;
+  let isImage = false;
+  let normalizedMimeType = '';
+
+  if (hasAnalysisFile) {
+    const uploadedName = String(analysisFile.name || '').toLowerCase();
+    const uploadedType = String(analysisFile.type || '').toLowerCase();
+    isPdf = uploadedType === 'application/pdf' || uploadedName.endsWith('.pdf') || declaredFileType === 'pdf';
+    isImage = ['image/jpeg', 'image/png', 'image/webp'].includes(uploadedType)
+      || /\.(jpe?g|png|webp)$/.test(uploadedName)
+      || declaredFileType === 'image';
+
+    if (!isPdf && !isImage) return json({ error: 'Поддерживаются только PDF, JPG, PNG и WEBP.' }, 400);
+    if (analysisFile.size > 10 * 1024 * 1024) return json({ error: 'Файл слишком большой. Для этого MVP лучше ограничить размер до 10 МБ.' }, 400);
+
+    if (isPdf) normalizedMimeType = 'application/pdf';
+    else if (uploadedType === 'image/png' || uploadedName.endsWith('.png')) normalizedMimeType = 'image/png';
+    else if (uploadedType === 'image/webp' || uploadedName.endsWith('.webp')) normalizedMimeType = 'image/webp';
+    else normalizedMimeType = 'image/jpeg';
   }
 
   const brandName = (KB.branding && KB.branding.brand) || env.PRODUCT_NAME || 'LactoMi Balance';
@@ -567,29 +583,29 @@ export async function onRequestPost(context) {
       extracted = attachStatuses(extractMarkers(normalizeTextForParsing(workingText)));
     }
 
-    if (extracted.length < 4 && hasPdfFile && env.AI && typeof env.AI.toMarkdown === 'function') {
+    if (extracted.length < 4 && hasAnalysisFile && env.AI && typeof env.AI.toMarkdown === 'function') {
       try {
-        const buffer = await pdf.arrayBuffer();
+        const buffer = await analysisFile.arrayBuffer();
+        const conversionOptions = isPdf
+          ? { pdf: { metadata: false } }
+          : { image: { descriptionLanguage: 'en' } };
+
         const converted = await env.AI.toMarkdown(
           {
-            name: pdf.name || 'analysis.pdf',
-            blob: new Blob([buffer], { type: 'application/pdf' })
+            name: analysisFile.name || (isImage ? 'analysis-image.jpg' : 'analysis.pdf'),
+            blob: new Blob([buffer], { type: normalizedMimeType || analysisFile.type || 'application/octet-stream' })
           },
-          {
-            conversionOptions: {
-              pdf: { metadata: false }
-            }
-          }
+          { conversionOptions }
         );
 
         const doc = normalizeConversionResult(converted);
         if (doc && doc.format === 'markdown' && doc.data) {
           const fallbackText = trimMarkdown(stripSensitiveLines(String(doc.data || '')), 50000);
           const fallbackExtracted = attachStatuses(extractMarkers(normalizeTextForParsing(fallbackText)));
-          if (fallbackExtracted.length > extracted.length) {
+          if (fallbackExtracted.length > extracted.length || !workingText) {
             workingText = fallbackText;
             extracted = fallbackExtracted;
-            source = 'tomarkdown';
+            source = isImage ? 'image_tomarkdown' : 'tomarkdown';
           }
         }
       } catch (_) {
@@ -607,14 +623,15 @@ export async function onRequestPost(context) {
     answer = cleanupAiAnswer(answer);
     if (!answer) {
       return json({
-        error: 'Не получилось надёжно разобрать этот PDF.',
-        hint: 'Лучше всего подходят цифровые PDF, где текст можно выделить. Со сканами точность ниже.',
+        error: 'Не получилось надёжно разобрать этот файл.',
+        hint: 'Лучше всего подходят цифровые PDF и чёткие фото без бликов. Если это фото, попробуйте переснять лист ровно сверху.',
         extracted_markers: extracted.length,
         source: source || 'none',
-        file_name: pdfName,
+        file_name: fileName,
         browser_extract_error: browserExtractError || undefined,
         ai_available: !!(env.AI && env.AI.run),
-        tomarkdown_available: !!(env.AI && typeof env.AI.toMarkdown === 'function')
+        tomarkdown_available: !!(env.AI && typeof env.AI.toMarkdown === 'function'),
+        file_kind: isImage ? 'image' : (isPdf ? 'pdf' : 'text')
       }, 422);
     }
 
@@ -622,8 +639,8 @@ export async function onRequestPost(context) {
       answer,
       extracted_markers: extracted.length,
       extracted_chars: workingText.length,
-      source: source || (hasPdfFile ? 'pdf_only' : 'text_only'),
-      file_name: pdfName
+      source: source || (hasAnalysisFile ? (isImage ? 'image_only' : 'pdf_only') : 'text_only'),
+      file_name: fileName
     });
   } catch (error) {
     return json({

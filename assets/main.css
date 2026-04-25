@@ -957,3 +957,12 @@ textarea {
     align-items: flex-start;
   }
 }
+
+
+.field-help {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}

@@ -416,28 +416,62 @@ async function aiFallback(env, markdownText, message, brandName) {
 
 
 async function validateTurnstileToken(token, secret, remoteIp) {
-  if (!secret) {
+  const cleanSecret = String(secret || '').trim();
+  const cleanToken = String(token || '').trim();
+
+  if (!cleanSecret) {
     return { success: false, 'error-codes': ['missing-input-secret'] };
   }
 
-  const body = new FormData();
-  body.append('secret', secret);
-  body.append('response', token);
-  if (remoteIp) body.append('remoteip', remoteIp);
+  if (!cleanToken) {
+    return { success: false, 'error-codes': ['missing-input-response'] };
+  }
+
+  // Cloudflare Siteverify officially accepts JSON or
+  // application/x-www-form-urlencoded. URLSearchParams avoids
+  // multipart/FormData compatibility issues in Pages Functions.
+  const body = new URLSearchParams();
+  body.set('secret', cleanSecret);
+  body.set('response', cleanToken);
+
+  const firstIp = String(remoteIp || '').split(',')[0].trim();
+  if (firstIp) body.set('remoteip', firstIp);
 
   try {
     const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
       body
     });
+
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      return { success: false, 'error-codes': ['internal-error'] };
+      return {
+        success: false,
+        'error-codes': Array.isArray(result['error-codes']) ? result['error-codes'] : ['internal-error']
+      };
     }
     return result;
-  } catch {
-    return { success: false, 'error-codes': ['internal-error'] };
+  } catch (error) {
+    return {
+      success: false,
+      'error-codes': ['internal-error'],
+      internal_message: error && error.message ? String(error.message) : ''
+    };
   }
+}
+
+function parseExpectedTurnstileHosts(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function turnstileDebugEnabled(env) {
+  return String(env.DEBUG_TURNSTILE || '').trim() === '1';
 }
 
 export async function onRequestOptions() {
@@ -477,14 +511,37 @@ export async function onRequestPost(context) {
 
   const remoteIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
   const turnstileResult = await validateTurnstileToken(turnstileToken, env.TURNSTILE_SECRET, remoteIp);
+  const turnstileErrorCodes = turnstileResult && Array.isArray(turnstileResult['error-codes'])
+    ? turnstileResult['error-codes']
+    : [];
+
   if (!turnstileResult || !turnstileResult.success) {
+    console.warn('Turnstile validation failed', JSON.stringify({
+      errorCodes: turnstileErrorCodes,
+      hostname: turnstileResult && turnstileResult.hostname ? turnstileResult.hostname : '',
+      hasSecret: Boolean(env.TURNSTILE_SECRET),
+      hasToken: Boolean(turnstileToken)
+    }));
+
     return json({
-      error: 'Проверка безопасности не пройдена. Обновите капчу и попробуйте снова.'
+      error: 'Проверка безопасности не пройдена. Обновите капчу и попробуйте снова.',
+      details: turnstileDebugEnabled(env) && turnstileErrorCodes.length
+        ? 'Turnstile: ' + turnstileErrorCodes.join(', ')
+        : undefined,
+      hint: turnstileDebugEnabled(env)
+        ? 'Проверьте, что TURNSTILE_SECRET и turnstileSiteKey взяты из одного и того же Turnstile-виджета, а текущий домен добавлен в Hostname Management.'
+        : undefined
     }, 400);
   }
 
-  if (env.TURNSTILE_EXPECTED_HOSTNAME && turnstileResult.hostname && turnstileResult.hostname !== env.TURNSTILE_EXPECTED_HOSTNAME) {
-    return json({ error: 'Проверка безопасности не совпала с доменом сайта.' }, 400);
+  const expectedTurnstileHosts = parseExpectedTurnstileHosts(env.TURNSTILE_EXPECTED_HOSTNAME);
+  if (expectedTurnstileHosts.length > 0 && turnstileResult.hostname && !expectedTurnstileHosts.includes(turnstileResult.hostname)) {
+    return json({
+      error: 'Проверка безопасности не совпала с доменом сайта.',
+      details: turnstileDebugEnabled(env)
+        ? 'Ожидали: ' + expectedTurnstileHosts.join(', ') + '; получили: ' + turnstileResult.hostname
+        : undefined
+    }, 400);
   }
 
   const hasPdfFile = pdf instanceof File;

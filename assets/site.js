@@ -1165,7 +1165,7 @@
   function resizeChatInput() {
     if (!chatFollowupInput) return;
     chatFollowupInput.style.height = 'auto';
-    const nextHeight = Math.min(Math.max(chatFollowupInput.scrollHeight, 48), 140);
+    const nextHeight = Math.min(Math.max(chatFollowupInput.scrollHeight, 64), 180);
     chatFollowupInput.style.height = nextHeight + 'px';
   }
 

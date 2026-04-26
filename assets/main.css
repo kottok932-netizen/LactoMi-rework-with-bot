@@ -1544,7 +1544,7 @@ html[data-theme="dark"] .message-system {
 .chat-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  align-items: center;
   gap: 8px;
   padding: 8px;
   border: 1px solid rgba(15, 123, 91, 0.16);
@@ -1562,15 +1562,22 @@ html[data-theme="dark"] .message-system {
 
 .chat-composer textarea,
 .chat-composer textarea:focus {
-  min-height: 48px;
-  max-height: 140px;
-  padding: 10px 12px;
+  min-height: 64px;
+  max-height: 180px;
+  padding: 13px 12px;
   border: 0;
   outline: 0;
   resize: none;
+  overflow: hidden;
+  scrollbar-width: none;
   background: transparent;
   box-shadow: none;
   line-height: 1.45;
+  box-sizing: border-box;
+}
+
+.chat-composer textarea::-webkit-scrollbar {
+  display: none;
 }
 
 .chat-composer textarea::placeholder {
@@ -1583,8 +1590,8 @@ html[data-theme="dark"] .message-system {
 }
 
 .chat-composer .chat-send-btn {
-  min-height: 44px;
-  padding: 0 12px 0 16px;
+  min-height: 48px;
+  padding: 0 13px 0 17px;
   border-radius: 18px;
   display: inline-flex;
   align-items: center;
@@ -1664,5 +1671,20 @@ html[data-theme="dark"] .chat-send-icon {
 
   .chat-send-label {
     display: none;
+  }
+}
+
+/* Chat input height/scrollbar fix */
+@media (max-width: 520px) {
+  .chat-composer {
+    padding: 7px;
+    border-radius: 22px;
+  }
+
+  .chat-composer textarea,
+  .chat-composer textarea:focus {
+    min-height: 62px;
+    padding: 12px 10px;
+    font-size: 0.95rem;
   }
 }

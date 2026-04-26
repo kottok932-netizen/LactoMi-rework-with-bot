@@ -334,13 +334,15 @@
     return html;
   }
 
-  function renderBotMessage(text) {
+  function renderBotMessage(text, options) {
+    options = options || {};
+    const compact = !!options.compact;
     const normalized = cleanupDisplayText(text);
     if (!normalized) return '<div class="bot-answer-empty">Пустой ответ.</div>';
     const blocks = normalized.split(/\n{2,}/).map(function (block) { return block.trim(); }).filter(Boolean);
     const html = blocks.map(renderBotBlock).join('');
     return [
-      '<div class="bot-card">',
+      '<div class="bot-card' + (compact ? ' bot-card-compact' : '') + '">',
       '  <div class="bot-card-top">',
       '    <div class="bot-avatar">AI</div>',
       '    <div class="bot-card-meta">',
@@ -353,11 +355,12 @@
     ].join('');
   }
 
-  function addMessage(type, text) {
+  function addMessage(type, text, options) {
+    options = options || {};
     const div = document.createElement('div');
     div.className = 'message ' + (type === 'user' ? 'message-user' : 'message-bot');
     if (type === 'bot') {
-      div.innerHTML = renderBotMessage(text);
+      div.innerHTML = renderBotMessage(text, options);
     } else {
       div.innerHTML = '<div class="user-bubble">' + renderInlineText(text) + '</div>';
     }
@@ -1159,6 +1162,25 @@
     }
   });
 
+  function resizeChatInput() {
+    if (!chatFollowupInput) return;
+    chatFollowupInput.style.height = 'auto';
+    const nextHeight = Math.min(Math.max(chatFollowupInput.scrollHeight, 48), 140);
+    chatFollowupInput.style.height = nextHeight + 'px';
+  }
+
+  if (chatFollowupInput) {
+    chatFollowupInput.addEventListener('input', resizeChatInput);
+    chatFollowupInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (chatFollowupForm && !chatSendBtn.disabled) {
+          chatFollowupForm.requestSubmit();
+        }
+      }
+    });
+  }
+
   if (chatFollowupForm && chatFollowupInput) {
     chatFollowupForm.addEventListener('submit', async function (event) {
       event.preventDefault();
@@ -1171,6 +1193,7 @@
       }
 
       chatFollowupInput.value = '';
+      resizeChatInput();
       addMessage('user', question);
       rememberChatMessage('user', question);
       setStatus('Пишем ответ…', 'loading');
@@ -1178,13 +1201,13 @@
 
       try {
         const answer = await sendFollowupQuestion(question);
-        addMessage('bot', answer);
+        addMessage('bot', answer, { compact: true });
         rememberChatMessage('assistant', answer);
         setStatus('Чат активен', 'ok');
         setChatComposerEnabled(true, 'Можно задать следующий вопрос по этому анализу.');
         chatFollowupInput.focus();
       } catch (error) {
-        addMessage('bot', 'Не удалось продолжить чат: ' + (error && error.message ? error.message : 'попробуйте ещё раз.') + '\n\nЕсли сессия истекла, загрузите анализ заново и получите новую расшифровку.');
+        addMessage('bot', 'Не удалось продолжить чат: ' + (error && error.message ? error.message : 'попробуйте ещё раз.') + '\n\nЕсли сессия истекла, загрузите анализ заново и получите новую расшифровку.', { compact: true });
         setStatus('Ошибка чата', 'error');
         if (chatSessionToken && chatAnalysisContext) {
           setChatComposerEnabled(true, 'Можно попробовать отправить вопрос ещё раз.');

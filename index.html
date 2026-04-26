@@ -210,9 +210,12 @@
 
             <form id="chatFollowupForm" class="chat-followup-form is-disabled" aria-label="Продолжить диалог с LactoMi AI">
               <label class="chat-followup-label" for="chatFollowupInput">Продолжить чат по этому анализу</label>
-              <div class="chat-followup-row">
-                <textarea id="chatFollowupInput" rows="2" placeholder="Например: объясни Lactobacillus простыми словами или что обсудить с врачом?" disabled></textarea>
-                <button id="chatSendBtn" class="btn btn-primary chat-send-btn" type="submit" disabled>Отправить</button>
+              <div class="chat-followup-row chat-composer">
+                <textarea id="chatFollowupInput" rows="1" placeholder="Спросите по анализу: что важно, что означает показатель, что обсудить с врачом…" disabled></textarea>
+                <button id="chatSendBtn" class="btn btn-primary chat-send-btn" type="submit" disabled>
+                  <span class="chat-send-label">Отправить</span>
+                  <span class="chat-send-icon" aria-hidden="true">↗</span>
+                </button>
               </div>
               <div class="chat-followup-actions">
                 <p id="chatFollowupHelp" class="chat-followup-help">Сначала загрузите анализ и получите первую расшифровку — после этого чат станет активным.</p>

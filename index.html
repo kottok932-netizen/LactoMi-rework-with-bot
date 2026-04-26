@@ -21,6 +21,10 @@
         <a href="./guide.html">Гид</a>
         <a href="#faq">FAQ</a>
       </nav>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Переключить тёмную тему" aria-pressed="false">
+        <span class="theme-toggle-icon" aria-hidden="true">☾</span>
+        <span class="theme-toggle-text">Тёмная тема</span>
+      </button>
     </div>
   </header>
 
@@ -133,6 +137,11 @@
 
                 <p id="selectedFileName" class="selected-file-name">Файл не выбран</p>
                 <small class="field-help">Поддерживаются PDF, JPG, PNG и WEBP до 10 МБ. На телефоне можно выбрать файл, взять фото из галереи или сразу сделать снимок камерой.</small>
+
+                <label class="checkbox-row photo-enhance-row">
+                  <input id="photoEnhance" type="checkbox" value="1" checked>
+                  <span>Автоматически улучшать фото перед распознаванием: повысить контраст, убрать серость и подготовить снимок для OCR.</span>
+                </label>
               </div>
 
               <label class="field">
@@ -391,6 +400,7 @@
     </div>
   </footer>
 
+  <script src="./assets/theme.js"></script>
   <script src="./assets/config.js"></script>
   <script src="./assets/site.js"></script>
 </body>

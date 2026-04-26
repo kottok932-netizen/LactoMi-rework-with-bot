@@ -11,6 +11,7 @@
   const websiteField = document.getElementById('websiteField');
   const consentField = document.getElementById('analysisConsent');
   const privacyField = document.getElementById('analysisPrivacy');
+  const photoEnhanceField = document.getElementById('photoEnhance');
   const turnstileWrap = document.getElementById('turnstileWrap');
   const turnstileWidgetEl = document.getElementById('turnstileWidget');
   const turnstileHelp = document.getElementById('turnstileHelp');
@@ -374,6 +375,116 @@
     return size + ' Б';
   }
 
+
+  function clampChannel(value) {
+    return Math.max(0, Math.min(255, Math.round(value)));
+  }
+
+  function loadImageFromFile(file) {
+    if (window.createImageBitmap) {
+      return createImageBitmap(file, { imageOrientation: 'from-image' }).catch(function () {
+        return null;
+      }).then(function (bitmap) {
+        if (bitmap) return bitmap;
+        return loadImageElementFromFile(file);
+      });
+    }
+    return loadImageElementFromFile(file);
+  }
+
+  function loadImageElementFromFile(file) {
+    return new Promise(function (resolve, reject) {
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = function () {
+        URL.revokeObjectURL(url);
+        resolve(image);
+      };
+      image.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('Не удалось открыть изображение для улучшения.'));
+      };
+      image.src = url;
+    });
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise(function (resolve, reject) {
+      canvas.toBlob(function (blob) {
+        if (blob) resolve(blob);
+        else reject(new Error('Не удалось подготовить улучшенное фото.'));
+      }, type, quality);
+    });
+  }
+
+  async function enhanceImageForOcr(file) {
+    const image = await loadImageFromFile(file);
+    const sourceWidth = image.width || image.naturalWidth || 0;
+    const sourceHeight = image.height || image.naturalHeight || 0;
+    if (!sourceWidth || !sourceHeight) throw new Error('Не удалось определить размер изображения.');
+
+    const maxSide = 2300;
+    const minLongSide = 1600;
+    let scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+    if (Math.max(sourceWidth, sourceHeight) < minLongSide) {
+      scale = Math.min(maxSide / Math.max(sourceWidth, sourceHeight), minLongSide / Math.max(sourceWidth, sourceHeight));
+    }
+
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) throw new Error('Браузер не смог подготовить фото к OCR.');
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(image, 0, 0, width, height);
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+
+    // First pass: estimate light background and contrast.
+    let minLum = 255;
+    let maxLum = 0;
+    let sumLum = 0;
+    const sampleStep = Math.max(4, Math.floor(data.length / 4 / 90000));
+    let sampleCount = 0;
+    for (let i = 0; i < data.length; i += 4 * sampleStep) {
+      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      minLum = Math.min(minLum, lum);
+      maxLum = Math.max(maxLum, lum);
+      sumLum += lum;
+      sampleCount += 1;
+    }
+    const avgLum = sampleCount ? sumLum / sampleCount : 180;
+    const contrast = avgLum < 150 ? 1.45 : 1.32;
+    const brightness = avgLum < 150 ? 22 : 10;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      // Flatten colored screen glare a bit and make text edges stronger.
+      lum = ((lum - 128) * contrast) + 128 + brightness;
+      if (maxLum - minLum < 90) {
+        lum = ((lum - avgLum) * 1.55) + avgLum + 12;
+      }
+      const value = clampChannel(lum);
+      data[i] = value;
+      data[i + 1] = value;
+      data[i + 2] = value;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    const blob = await canvasToBlob(canvas, 'image/jpeg', 0.92);
+    const originalName = String(file.name || 'analysis-photo.jpg').replace(/\.[^.]+$/, '');
+    return new File([blob], originalName + '-ocr.jpg', { type: 'image/jpeg' });
+  }
+
   function rememberSelectedFile(input) {
     const file = input && input.files && input.files[0];
     if (!file) return;
@@ -715,7 +826,7 @@
 
       turnstileWidgetId = turnstile.render(turnstileWidgetEl, {
         sitekey: turnstileSiteKey,
-        theme: 'light',
+        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light',
         callback: function (token) {
           turnstileToken = token || '';
           setTurnstileHelp('Проверка пройдена. Можно отправлять анализ.', 'ok');
@@ -735,6 +846,19 @@
       setTurnstileHelp('Не удалось загрузить проверку безопасности. Обновите страницу и попробуйте снова.', 'error');
     }
   }
+
+
+  window.addEventListener('lactomi-theme-change', function () {
+    if (!turnstileWidgetEl || !window.turnstile || turnstileWidgetId === null) return;
+    try {
+      turnstileWidgetEl.innerHTML = '';
+      turnstileWidgetId = null;
+      turnstileToken = '';
+      initTurnstile();
+    } catch (_) {
+      // If Turnstile refuses to re-render, the next page refresh will pick up the theme.
+    }
+  });
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
@@ -879,6 +1003,7 @@
 
       let rawText = '';
       let browserExtractError = '';
+      let enhancedImageFile = null;
       if (isPdfFile) {
         try {
           setStatus('Читаем текст из PDF…', 'loading');
@@ -888,12 +1013,22 @@
           browserExtractError = pdfError && pdfError.message ? String(pdfError.message) : 'browser_pdf_extract_failed';
         }
       } else {
-        setStatus('Готовим фото к отправке…', 'loading');
+        setStatus('Готовим фото к распознаванию…', 'loading');
         browserExtractError = 'image_uploaded_no_browser_pdf_extract';
+        if (!photoEnhanceField || photoEnhanceField.checked) {
+          try {
+            enhancedImageFile = await enhanceImageForOcr(pdf);
+          } catch (enhanceError) {
+            browserExtractError += '; image_enhance_failed: ' + (enhanceError && enhanceError.message ? enhanceError.message : 'unknown');
+          }
+        }
       }
 
       const formData = new FormData();
       formData.append('analysis_pdf', pdf, pdf.name);
+      if (enhancedImageFile) {
+        formData.append('analysis_enhanced_image', enhancedImageFile, enhancedImageFile.name);
+      }
       formData.append('analysis_pdf_name', pdf.name || (isImageFile ? 'analysis-image.jpg' : 'analysis.pdf'));
       formData.append('analysis_file_type', isImageFile ? 'image' : 'pdf');
       formData.append('analysis_text', rawText || '');

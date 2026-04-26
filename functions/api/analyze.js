@@ -415,6 +415,78 @@ async function aiFallback(env, markdownText, message, brandName) {
 }
 
 
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+
+async function imageToDataUrl(file, mimeType) {
+  const buffer = await file.arrayBuffer();
+  const base64 = bytesToBase64(new Uint8Array(buffer));
+  return 'data:' + (mimeType || 'image/jpeg') + ';base64,' + base64;
+}
+
+async function imageVisionFallback(env, file, mimeType, message, brandName) {
+  if (!env.AI || !env.AI.run) return '';
+  const model = env.IMAGE_VISION_MODEL || '@cf/meta/llama-3.2-11b-vision-instruct';
+
+  try {
+    const image = await imageToDataUrl(file, mimeType);
+    const prompt = [
+      'На изображении может быть русскоязычный лабораторный бланк анализа микробиоты кишечника.',
+      'Задача: аккуратно переписать таблицу анализа в текст, чтобы другой алгоритм смог найти показатели.',
+      'Верни только фактические строки: название показателя, результат, единицы, референс. Не придумывай значения.',
+      'Особенно ищи: Общая бактериальная масса, Lactobacillus spp., Bifidobacterium spp., Escherichia coli, Bacteroides spp., Faecalibacterium prausnitzii, Bacteroides thetaiotaomicron, Akkermansia muciniphila, Enterococcus spp., Blautia spp., Acinetobacter spp., Eubacterium rectale, Streptococcus spp., Roseburia inulinivorans, Prevotella spp., Methanobrevibacter smithii, Methanosphaera stadmanae, Ruminococcus spp., соотношение Bacteroides/Faecalibacterium prausnitzii.',
+      'Формат каждой строки: Название — результат — единицы — референс.',
+      'Если строку плохо видно, пропусти её или пометь как "неразборчиво". Не ставь диагноз.',
+      message ? 'Вопрос пользователя: ' + message : '',
+      'Бренд сервиса: ' + brandName + '.'
+    ].filter(Boolean).join('\n');
+
+    const result = await env.AI.run(model, {
+      messages: [
+        { role: 'system', content: 'Ты OCR-помощник. Ты переписываешь медицинские таблицы с изображения в текст без интерпретации.' },
+        { role: 'user', content: prompt }
+      ],
+      image,
+      temperature: 0.05,
+      max_tokens: 1800
+    });
+
+    return cleanupAiAnswer(extractAiText(result));
+  } catch {
+    return '';
+  }
+}
+
+async function convertCandidateToMarkdown(env, candidate) {
+  if (!env.AI || typeof env.AI.toMarkdown !== 'function') return '';
+  const buffer = await candidate.file.arrayBuffer();
+  const conversionOptions = candidate.isPdf
+    ? { pdf: { metadata: false } }
+    : { image: { descriptionLanguage: env.TOMARKDOWN_IMAGE_LANGUAGE || 'en' } };
+
+  const converted = await env.AI.toMarkdown(
+    {
+      name: candidate.file.name || candidate.name || (candidate.isImage ? 'analysis-image.jpg' : 'analysis.pdf'),
+      blob: new Blob([buffer], { type: candidate.mimeType || candidate.file.type || 'application/octet-stream' })
+    },
+    { conversionOptions }
+  );
+
+  const doc = normalizeConversionResult(converted);
+  if (doc && doc.format === 'markdown' && doc.data) {
+    return trimMarkdown(stripSensitiveLines(String(doc.data || '')), 50000);
+  }
+  return '';
+}
+
+
 async function validateTurnstileToken(token, secret, remoteIp) {
   const cleanSecret = String(secret || '').trim();
   const cleanToken = String(token || '').trim();
@@ -487,6 +559,7 @@ export async function onRequestPost(context) {
 
   const formData = await request.formData();
   const analysisFile = formData.get('analysis_pdf');
+  const enhancedImageFile = formData.get('analysis_enhanced_image');
   const browserText = trimMarkdown(stripSensitiveLines(String(formData.get('analysis_text') || '')), 50000);
   const fileName = String(formData.get('analysis_pdf_name') || ((analysisFile instanceof File && analysisFile.name) ? analysisFile.name : 'analysis.pdf'));
   const declaredFileType = String(formData.get('analysis_file_type') || '').trim().toLowerCase();
@@ -546,12 +619,14 @@ export async function onRequestPost(context) {
   }
 
   const hasAnalysisFile = analysisFile instanceof File;
+  const hasEnhancedImageFile = enhancedImageFile instanceof File;
   const hasBrowserText = browserText.length >= 80;
   if (!hasAnalysisFile && !hasBrowserText) return json({ error: 'Нужно загрузить PDF или фото анализа.' }, 400);
 
   let isPdf = false;
   let isImage = false;
   let normalizedMimeType = '';
+  let enhancedMimeType = '';
 
   if (hasAnalysisFile) {
     const uploadedName = String(analysisFile.name || '').toLowerCase();
@@ -570,6 +645,17 @@ export async function onRequestPost(context) {
     else normalizedMimeType = 'image/jpeg';
   }
 
+  if (hasEnhancedImageFile) {
+    const enhancedName = String(enhancedImageFile.name || '').toLowerCase();
+    const enhancedType = String(enhancedImageFile.type || '').toLowerCase();
+    const enhancedIsImage = ['image/jpeg', 'image/png', 'image/webp'].includes(enhancedType) || /\.(jpe?g|png|webp)$/.test(enhancedName);
+    if (!isImage || !enhancedIsImage) return json({ error: 'Улучшенная копия допускается только для фото JPG, PNG или WEBP.' }, 400);
+    if (enhancedImageFile.size > 10 * 1024 * 1024) return json({ error: 'Улучшенное фото получилось слишком большим. Попробуйте загрузить исходное фото меньшего размера.' }, 400);
+    if (enhancedType === 'image/png' || enhancedName.endsWith('.png')) enhancedMimeType = 'image/png';
+    else if (enhancedType === 'image/webp' || enhancedName.endsWith('.webp')) enhancedMimeType = 'image/webp';
+    else enhancedMimeType = 'image/jpeg';
+  }
+
   const brandName = (KB.branding && KB.branding.brand) || env.PRODUCT_NAME || 'LactoMi Balance';
 
   try {
@@ -583,33 +669,58 @@ export async function onRequestPost(context) {
       extracted = attachStatuses(extractMarkers(normalizeTextForParsing(workingText)));
     }
 
-    if (extracted.length < 4 && hasAnalysisFile && env.AI && typeof env.AI.toMarkdown === 'function') {
-      try {
-        const buffer = await analysisFile.arrayBuffer();
-        const conversionOptions = isPdf
-          ? { pdf: { metadata: false } }
-          : { image: { descriptionLanguage: 'en' } };
+    const conversionCandidates = [];
+    if (hasAnalysisFile) {
+      if (isImage && hasEnhancedImageFile) {
+        conversionCandidates.push({
+          file: enhancedImageFile,
+          isPdf: false,
+          isImage: true,
+          mimeType: enhancedMimeType || 'image/jpeg',
+          name: enhancedImageFile.name || 'analysis-image-ocr.jpg',
+          source: 'image_enhanced_tomarkdown'
+        });
+      }
+      conversionCandidates.push({
+        file: analysisFile,
+        isPdf,
+        isImage,
+        mimeType: normalizedMimeType || analysisFile.type || 'application/octet-stream',
+        name: analysisFile.name || (isImage ? 'analysis-image.jpg' : 'analysis.pdf'),
+        source: isImage ? 'image_original_tomarkdown' : 'tomarkdown'
+      });
+    }
 
-        const converted = await env.AI.toMarkdown(
-          {
-            name: analysisFile.name || (isImage ? 'analysis-image.jpg' : 'analysis.pdf'),
-            blob: new Blob([buffer], { type: normalizedMimeType || analysisFile.type || 'application/octet-stream' })
-          },
-          { conversionOptions }
-        );
-
-        const doc = normalizeConversionResult(converted);
-        if (doc && doc.format === 'markdown' && doc.data) {
-          const fallbackText = trimMarkdown(stripSensitiveLines(String(doc.data || '')), 50000);
+    if (extracted.length < 4 && conversionCandidates.length && env.AI && typeof env.AI.toMarkdown === 'function') {
+      for (const candidate of conversionCandidates) {
+        try {
+          const fallbackText = await convertCandidateToMarkdown(env, candidate);
+          if (!fallbackText) continue;
           const fallbackExtracted = attachStatuses(extractMarkers(normalizeTextForParsing(fallbackText)));
-          if (fallbackExtracted.length > extracted.length || !workingText) {
+          if (fallbackExtracted.length > extracted.length || (!workingText && fallbackText.length > workingText.length)) {
             workingText = fallbackText;
             extracted = fallbackExtracted;
-            source = isImage ? 'image_tomarkdown' : 'tomarkdown';
+            source = candidate.source;
           }
+          if (extracted.length >= 4) break;
+        } catch (_) {
+          // try the next candidate
         }
-      } catch (_) {
-        // ignore fallback conversion failure
+      }
+    }
+
+    if (extracted.length < 4 && isImage && conversionCandidates.length && env.AI && env.AI.run) {
+      for (const candidate of conversionCandidates) {
+        if (!candidate.isImage) continue;
+        const visionText = await imageVisionFallback(env, candidate.file, candidate.mimeType, message, brandName);
+        if (!visionText) continue;
+        const visionExtracted = attachStatuses(extractMarkers(normalizeTextForParsing(visionText)));
+        if (visionExtracted.length > extracted.length || (!workingText && visionText.length > workingText.length)) {
+          workingText = visionText;
+          extracted = visionExtracted;
+          source = candidate.source.replace('tomarkdown', 'vision');
+        }
+        if (extracted.length >= 4) break;
       }
     }
 

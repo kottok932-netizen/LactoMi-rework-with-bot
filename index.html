@@ -201,12 +201,24 @@
                   </div>
                   <div class="bot-answer">
                     <section class="bot-section section-neutral">
-                      <p>Загрузите PDF или фото анализа, и здесь появится аккуратная расшифровка: краткий итог, ключевые отклонения, их возможное значение и общие безопасные шаги.</p>
+                      <p>Загрузите PDF или фото анализа, и здесь появится аккуратная расшифровка. После первого ответа можно будет продолжить диалог прямо здесь: задавать уточняющие вопросы по этому анализу, просить объяснить отдельный показатель или сформировать список вопросов врачу.</p>
                     </section>
                   </div>
                 </div>
               </div>
             </div>
+
+            <form id="chatFollowupForm" class="chat-followup-form is-disabled" aria-label="Продолжить диалог с LactoMi AI">
+              <label class="chat-followup-label" for="chatFollowupInput">Продолжить чат по этому анализу</label>
+              <div class="chat-followup-row">
+                <textarea id="chatFollowupInput" rows="2" placeholder="Например: объясни Lactobacillus простыми словами или что обсудить с врачом?" disabled></textarea>
+                <button id="chatSendBtn" class="btn btn-primary chat-send-btn" type="submit" disabled>Отправить</button>
+              </div>
+              <div class="chat-followup-actions">
+                <p id="chatFollowupHelp" class="chat-followup-help">Сначала загрузите анализ и получите первую расшифровку — после этого чат станет активным.</p>
+                <button id="chatResetBtn" class="link-button" type="button" disabled>Очистить чат</button>
+              </div>
+            </form>
           </div>
         </div>
       </div>

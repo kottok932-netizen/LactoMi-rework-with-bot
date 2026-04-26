@@ -15,6 +15,11 @@
   const turnstileWrap = document.getElementById('turnstileWrap');
   const turnstileWidgetEl = document.getElementById('turnstileWidget');
   const turnstileHelp = document.getElementById('turnstileHelp');
+  const chatFollowupForm = document.getElementById('chatFollowupForm');
+  const chatFollowupInput = document.getElementById('chatFollowupInput');
+  const chatSendBtn = document.getElementById('chatSendBtn');
+  const chatResetBtn = document.getElementById('chatResetBtn');
+  const chatFollowupHelp = document.getElementById('chatFollowupHelp');
 
   if (!form || !pdfInput || !chatOutput || !statusBadge || !submitBtn) {
     return;
@@ -25,6 +30,9 @@
   let turnstileScriptPromise = null;
   let turnstileWidgetId = null;
   let turnstileToken = '';
+  let chatSessionToken = '';
+  let chatAnalysisContext = '';
+  let chatHistory = [];
   const config = window.LACTOMI_CONFIG || {};
   const brandName = config.brandName || 'LactoMi';
   const turnstileSiteKey = String(config.turnstileSiteKey || '').trim();
@@ -366,6 +374,76 @@
     statusBadge.classList.remove('status-error', 'status-loading');
     if (kind === 'error') statusBadge.classList.add('status-error');
     if (kind === 'loading') statusBadge.classList.add('status-loading');
+  }
+
+  function setChatComposerEnabled(enabled, helpText) {
+    if (!chatFollowupForm || !chatFollowupInput || !chatSendBtn) return;
+    chatFollowupForm.classList.toggle('is-disabled', !enabled);
+    chatFollowupInput.disabled = !enabled;
+    chatSendBtn.disabled = !enabled;
+    if (chatResetBtn) chatResetBtn.disabled = !enabled;
+    if (chatFollowupHelp && helpText) chatFollowupHelp.textContent = helpText;
+  }
+
+  function addSystemMessage(text) {
+    if (!text) return;
+    const div = document.createElement('div');
+    div.className = 'message message-system';
+    div.textContent = text;
+    chatOutput.appendChild(div);
+    chatOutput.scrollTop = chatOutput.scrollHeight;
+  }
+
+  function resetFollowupChatState(helpText) {
+    chatSessionToken = '';
+    chatAnalysisContext = '';
+    chatHistory = [];
+    if (chatFollowupInput) chatFollowupInput.value = '';
+    setChatComposerEnabled(false, helpText || 'Сначала загрузите анализ и получите первую расшифровку — после этого чат станет активным.');
+  }
+
+  function rememberChatMessage(role, content) {
+    const clean = cleanupDisplayText(content).slice(0, 2500);
+    if (!clean) return;
+    chatHistory.push({ role: role, content: clean });
+    if (chatHistory.length > 10) chatHistory = chatHistory.slice(-10);
+  }
+
+  function buildAnalysisContext(payload) {
+    const parts = [];
+    if (payload.file_name) parts.push('Файл: ' + payload.file_name);
+    if (payload.source) parts.push('Источник распознавания: ' + payload.source);
+    if (typeof payload.extracted_markers === 'number') parts.push('Найдено показателей: ' + payload.extracted_markers);
+    if (payload.answer) parts.push('Первая расшифровка:\n' + cleanupDisplayText(payload.answer));
+    return parts.join('\n\n').slice(0, 7000);
+  }
+
+  async function sendFollowupQuestion(question) {
+    if (!chatSessionToken || !chatAnalysisContext) {
+      throw new Error('Сначала загрузите анализ и получите первую расшифровку.');
+    }
+
+    const formData = new FormData();
+    formData.append('mode', 'chat');
+    formData.append('chat_session', chatSessionToken);
+    formData.append('chat_context', chatAnalysisContext);
+    formData.append('chat_history', JSON.stringify(chatHistory.slice(-8)));
+    formData.append('message', question);
+    formData.append('website', websiteField ? websiteField.value : '');
+
+    const response = await fetch('/api/analyze', {
+      method: 'POST',
+      body: formData,
+      credentials: 'same-origin'
+    });
+
+    const payload = await response.json().catch(function () { return {}; });
+    if (!response.ok) {
+      throw new Error(payload.error || payload.details || 'Не удалось отправить сообщение.');
+    }
+    if (!payload.answer) throw new Error('Сервер не вернул текст ответа.');
+    if (payload.chat_session) chatSessionToken = payload.chat_session;
+    return payload.answer;
   }
 
   function formatFileSize(bytes) {
@@ -987,6 +1065,7 @@
     }
 
     clearMessages();
+    resetFollowupChatState('Обрабатываем новый анализ. Чат станет доступен после первой расшифровки.');
     addMessage('user', 'Файл: ' + pdf.name + (message ? '\n\nВопрос: ' + message : ''));
     setStatus('Готовим файл…', 'loading');
     submitBtn.disabled = true;
@@ -1059,6 +1138,15 @@
       }
 
       addMessage('bot', payload.answer);
+      chatSessionToken = payload.chat_session || '';
+      chatAnalysisContext = buildAnalysisContext(payload);
+      chatHistory = [];
+      rememberChatMessage('assistant', payload.answer);
+      if (chatSessionToken && chatAnalysisContext && payload.chat_available !== false) {
+        setChatComposerEnabled(true, 'Теперь можно продолжать диалог: задайте уточняющий вопрос по этому анализу.');
+      } else {
+        setChatComposerEnabled(false, 'Расшифровка готова, но продолжение чата недоступно: AI-модель для диалога не подключена.');
+      }
       setStatus('Готово', 'ok');
 
     } catch (error) {
@@ -1071,5 +1159,51 @@
     }
   });
 
+  if (chatFollowupForm && chatFollowupInput) {
+    chatFollowupForm.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      const question = (chatFollowupInput.value || '').trim();
+      if (!question) return;
+
+      if (websiteField && websiteField.value) {
+        setStatus('Запрос отклонён', 'error');
+        return;
+      }
+
+      chatFollowupInput.value = '';
+      addMessage('user', question);
+      rememberChatMessage('user', question);
+      setStatus('Пишем ответ…', 'loading');
+      setChatComposerEnabled(false, 'Бот отвечает. Подождите несколько секунд.');
+
+      try {
+        const answer = await sendFollowupQuestion(question);
+        addMessage('bot', answer);
+        rememberChatMessage('assistant', answer);
+        setStatus('Чат активен', 'ok');
+        setChatComposerEnabled(true, 'Можно задать следующий вопрос по этому анализу.');
+        chatFollowupInput.focus();
+      } catch (error) {
+        addMessage('bot', 'Не удалось продолжить чат: ' + (error && error.message ? error.message : 'попробуйте ещё раз.') + '\n\nЕсли сессия истекла, загрузите анализ заново и получите новую расшифровку.');
+        setStatus('Ошибка чата', 'error');
+        if (chatSessionToken && chatAnalysisContext) {
+          setChatComposerEnabled(true, 'Можно попробовать отправить вопрос ещё раз.');
+        } else {
+          resetFollowupChatState('Сессия чата недоступна. Загрузите анализ заново.');
+        }
+      }
+    });
+  }
+
+  if (chatResetBtn) {
+    chatResetBtn.addEventListener('click', function () {
+      resetFollowupChatState('Чат очищен. Чтобы продолжить, загрузите анализ заново.');
+      clearMessages();
+      addSystemMessage('Чат очищен. Загрузите анализ заново, чтобы начать новую расшифровку.');
+      setStatus('Ожидание файла', '');
+    });
+  }
+
+  resetFollowupChatState();
   initTurnstile();
 })();

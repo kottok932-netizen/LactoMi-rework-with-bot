@@ -26,6 +26,101 @@ function sameOriginAllowed(request) {
   return origin === requestUrl.origin;
 }
 
+const CHAT_SESSION_TTL_MS = 30 * 60 * 1000;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+function bytesToBase64Url(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlToBytes(value) {
+  const padded = String(value || '').replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(String(value || '').length / 4) * 4, '=');
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function textToBase64Url(value) {
+  return bytesToBase64Url(textEncoder.encode(String(value || '')));
+}
+
+function base64UrlToText(value) {
+  return textDecoder.decode(base64UrlToBytes(value));
+}
+
+function getChatSessionSecret(env) {
+  return String(env.CHAT_SESSION_SECRET || env.TURNSTILE_SECRET || env.PRODUCT_NAME || 'lactomi-chat-session').trim();
+}
+
+async function hmacSha256Base64Url(secret, data) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    textEncoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, textEncoder.encode(data));
+  return bytesToBase64Url(new Uint8Array(signature));
+}
+
+function constantTimeEqual(a, b) {
+  const left = String(a || '');
+  const right = String(b || '');
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i += 1) diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return diff === 0;
+}
+
+async function createChatSession(env) {
+  const payload = {
+    v: 1,
+    exp: Date.now() + CHAT_SESSION_TTL_MS,
+    nonce: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)
+  };
+  const payloadPart = textToBase64Url(JSON.stringify(payload));
+  const signature = await hmacSha256Base64Url(getChatSessionSecret(env), payloadPart);
+  return payloadPart + '.' + signature;
+}
+
+async function verifyChatSession(env, token) {
+  const value = String(token || '').trim();
+  const parts = value.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return false;
+  const expectedSignature = await hmacSha256Base64Url(getChatSessionSecret(env), parts[0]);
+  if (!constantTimeEqual(expectedSignature, parts[1])) return false;
+  try {
+    const payload = JSON.parse(base64UrlToText(parts[0]));
+    return payload && payload.v === 1 && Number(payload.exp) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function parseChatHistory(value) {
+  try {
+    const parsed = JSON.parse(String(value || '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({
+        role: item && item.role === 'user' ? 'Пользователь' : 'LactoMi AI',
+        content: String(item && item.content ? item.content : '').trim().slice(0, 1600)
+      }))
+      .filter((item) => item.content)
+      .slice(-8);
+  } catch {
+    return [];
+  }
+}
+
 function normalizeTextForParsing(text) {
   return String(text || '')
     .replace(/\r/g, '\n')
@@ -415,6 +510,70 @@ async function aiFallback(env, markdownText, message, brandName) {
 }
 
 
+async function aiChatFollowup(env, analysisContext, history, question, brandName) {
+  if (!env.AI || !env.AI.run) return '';
+  const model = env.AI_MODEL || '@cf/qwen/qwen3-30b-a3b-fp8';
+  const historyText = history.map((item) => item.role + ': ' + item.content).join('\n\n').slice(0, 7000);
+  const prompt = [
+    'Ты — русскоязычный чат-помощник сервиса ' + brandName + ' по образовательной расшифровке анализа микробиоты.',
+    'Продолжай диалог в формате живого чата: коротко, спокойно, понятно и по делу.',
+    'Опирайся только на контекст первой расшифровки и историю диалога ниже. Не придумывай новые показатели, которых нет в контексте.',
+    'Не ставь диагноз, не назначай лечение, дозировки, антибиотики, бактериофаги или БАДы. Для медицинских решений направляй к врачу.',
+    'Если пользователь просит план действий, дай безопасный список вопросов врачу и общие немедицинские шаги: переснять/пересдать анализ при сомнениях, сопоставить с симптомами, обсудить рацион и жалобы со специалистом.',
+    'Если вопрос не связан с анализом, мягко верни к теме анализа.',
+    'Если в вопросе есть тревожные симптомы или просьба оценить срочность, напомни обратиться к врачу очно; при сильной боли, крови, высокой температуре, обезвоживании или резком ухудшении — срочно за медицинской помощью.',
+    'Не используй markdown-заголовки, таблицы и сложную разметку. Можно использовать короткие списки.',
+    '',
+    'Контекст первой расшифровки:',
+    String(analysisContext || '').slice(0, 8000),
+    '',
+    historyText ? 'История диалога:\n' + historyText : '',
+    '',
+    'Новый вопрос пользователя: ' + question
+  ].filter(Boolean).join('\n');
+
+  try {
+    const aiResult = await env.AI.run(model, {
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+      max_tokens: 900
+    });
+    return cleanupAiAnswer(extractAiText(aiResult));
+  } catch {
+    return '';
+  }
+}
+
+async function handleChatFollowup(env, formData) {
+  const sessionToken = String(formData.get('chat_session') || '').trim();
+  const sessionOk = await verifyChatSession(env, sessionToken);
+  if (!sessionOk) {
+    return json({ error: 'Сессия чата истекла. Загрузите анализ заново и получите новую расшифровку.' }, 401);
+  }
+
+  const question = String(formData.get('message') || '').trim().slice(0, 1200);
+  if (!question) return json({ error: 'Введите вопрос для продолжения чата.' }, 400);
+  if (!env.AI || !env.AI.run) return json({ error: 'Чат сейчас недоступен: AI-модель не подключена.' }, 503);
+
+  const brandName = (KB.branding && KB.branding.brand) || env.PRODUCT_NAME || 'LactoMi Balance';
+  const analysisContext = String(formData.get('chat_context') || '').trim().slice(0, 9000);
+  const history = parseChatHistory(formData.get('chat_history'));
+
+  if (analysisContext.length < 80) {
+    return json({ error: 'Не хватает контекста анализа. Загрузите анализ заново и начните чат после первой расшифровки.' }, 400);
+  }
+
+  const answer = cleanupAiAnswer(await aiChatFollowup(env, analysisContext, history, question, brandName));
+  if (!answer) return json({ error: 'Не удалось подготовить ответ. Попробуйте переформулировать вопрос.' }, 500);
+
+  return json({
+    answer,
+    chat_session: await createChatSession(env),
+    chat_available: true
+  });
+}
+
+
 function bytesToBase64(bytes) {
   let binary = '';
   const chunkSize = 0x8000;
@@ -558,6 +717,7 @@ export async function onRequestPost(context) {
   }
 
   const formData = await request.formData();
+  const mode = String(formData.get('mode') || '').trim().toLowerCase();
   const analysisFile = formData.get('analysis_pdf');
   const enhancedImageFile = formData.get('analysis_enhanced_image');
   const browserText = trimMarkdown(stripSensitiveLines(String(formData.get('analysis_text') || '')), 50000);
@@ -571,6 +731,11 @@ export async function onRequestPost(context) {
   const turnstileToken = String(formData.get('cf-turnstile-response') || '').trim();
 
   if (honeypot) return json({ error: 'Запрос отклонён.' }, 400);
+
+  if (mode === 'chat') {
+    return handleChatFollowup(env, formData);
+  }
+
   if (consent !== '1' || privacyConfirm !== '1') {
     return json({ error: 'Нужно подтвердить согласие с условиями.' }, 400);
   }
@@ -746,12 +911,15 @@ export async function onRequestPost(context) {
       }, 422);
     }
 
+    const chatAvailable = !!(env.AI && env.AI.run);
     return json({
       answer,
       extracted_markers: extracted.length,
       extracted_chars: workingText.length,
       source: source || (hasAnalysisFile ? (isImage ? 'image_only' : 'pdf_only') : 'text_only'),
-      file_name: fileName
+      file_name: fileName,
+      chat_available: chatAvailable,
+      chat_session: chatAvailable ? await createChatSession(env) : ''
     });
   } catch (error) {
     return json({
